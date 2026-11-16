@@ -7,8 +7,9 @@ RUN := uv run
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-11s %s\n", $$1, $$2}'
 
-install:  ## Install dependencies from uv.lock
+install:  ## Install dependencies from uv.lock and the git pre-commit hooks
 	uv sync --locked
+	$(RUN) pre-commit install
 
 hooks:  ## Install the git pre-commit hooks (ruff, mypy, file hygiene)
 	$(RUN) pre-commit install

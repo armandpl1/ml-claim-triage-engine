@@ -18,8 +18,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 Requires Python 3.11 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-make install   # dependencies from uv.lock
-make hooks     # once: ruff and mypy run before every commit
+make install   # dependencies from uv.lock, plus the git hooks (ruff and mypy before every commit)
 make data      # download, stage and validate the data (~2 min the first time)
 make test      # all tests
 make help      # every command
@@ -53,6 +52,10 @@ The two are joined into one row per claim in `staging.claims` (26,444 claims). E
 | DVC                        | Versions the data. `dvc.yaml` declares the pipeline; `dvc repro` re-runs only changed stages |
 | DVC remote                 | `/tmp/dvc-storage`, a local folder standing in for cloud storage such as S3                  |
 | `.github/workflows/ci.yml` | Lint and type check, then all tests, on every pull request                                   |
+
+How Step 1 was verified:
+- **Hooks block bad commits.** A badly formatted file was rejected by ruff, and a function returning text where it declares `int` was rejected by mypy. Neither reached the history.
+- **Data round trip.** A fresh clone rebuilt the environment from `uv.lock`, pulled the data from the DVC remote byte-identical to the original, and passed every test.
 
 `/tmp` is cleared on reboot, so the local DVC remote is temporary by design. Re-run `make data && make push-data` to repopulate it, or point the remote elsewhere with `dvc remote modify localstore url <path>`.
 
