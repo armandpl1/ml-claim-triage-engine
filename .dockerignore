@@ -1,0 +1,8 @@
+# Keep the build context small: only what the Dockerfile copies.
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!src/
+!configs/
+**/__pycache__
