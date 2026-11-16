@@ -1,9 +1,9 @@
-# CI: lint, type checks, unit tests and data-contract tests.
+# CI: lint and types, the three-tier test suite, and a Docker build check.
 #
-#   lint (ruff, mypy) ──> test (unit + contract tests)
+#   lint (ruff, mypy) ──> test (unit, behavioral, integration) ──> docker (build + smoke)
 #
-# Runs on every pull request and every push to main. Later steps add a
-# Docker build check here and a model gate in cd-model-gate.yml.
+# Runs on every pull request and every push to main. Retraining and the
+# champion/challenger gate run in cd-model-gate.yml.
 #
 # Security: actions pinned to full commit SHAs (version in the comment;
 # Dependabot keeps both current), read-only token, no persisted credentials.
@@ -52,6 +52,15 @@ jobs:
       - name: Check uv.lock matches pyproject.toml
         run: uv lock --check
 
+      - name: Check the drift detector's own lockfile and that it runs
+        # Separate pinned env (Evidently needs pandas < 3). With no inference
+        # log it must exit 2, "too few requests"; anything else is a failure.
+        run: |
+          uv lock --script monitoring/drift_detector.py --check
+          status=0
+          uv run --script monitoring/drift_detector.py || status=$?
+          test "$status" -eq 2
+
       - name: Run pre-commit hooks (ruff lint and format, mypy, file hygiene)
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
@@ -76,7 +85,7 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Run pytest (unit and data-contract tests)
+      - name: Run pytest (unit, behavioral and integration tiers)
         run: uv run pytest --junitxml=reports/pytest.xml
 
       - name: Upload test report
@@ -86,3 +95,23 @@ jobs:
           name: pytest-report
           path: reports/pytest.xml
           retention-days: 14
+
+  docker:
+    name: Docker build
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the serving image
+        run: docker build --tag claim-triage-api:ci .
+
+      - name: Smoke test (the slim image can import the API)
+        run: docker run --rm claim-triage-api:ci python -c "import src.serving.app; print('ok')"
+
+      - name: Image size
+        run: docker image ls claim-triage-api:ci

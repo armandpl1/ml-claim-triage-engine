@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: claim-triage
+    folder: Claim triage
+    type: file
+    options:
+      path: /etc/grafana/provisioning/dashboards

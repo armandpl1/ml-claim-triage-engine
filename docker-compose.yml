@@ -1,0 +1,67 @@
+# The serving stack: API + MLflow + Prometheus + Grafana.
+#
+#   make up     build and start everything (runs as your user, from the repo root)
+#   make down   stop it
+#
+#   API         http://localhost:8000/docs
+#   MLflow      http://localhost:5000
+#   Prometheus  http://localhost:9090
+#   Grafana     http://localhost:3000   (dashboard "Claim triage API")
+#
+# The API loads @champion from the same MLflow registry used in training.
+# MLflow stores artifact locations as absolute host paths, so mlartifacts/ is
+# mounted at that same absolute path (${PWD}/mlartifacts) in every container.
+
+name: claim-triage
+
+services:
+  api:
+    build: .
+    image: claim-triage-api:latest
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      MLFLOW_TRACKING_URI: sqlite:////mlflow/mlflow.db
+      TOKENIZER_DIR: /app/artifacts/tokenizer
+      MODEL_CACHE_DIR: /tmp/models
+      INFERENCE_LOG_PATH: /data/inference/inference_log.db
+    volumes:
+      - ./mlflow.db:/mlflow/mlflow.db
+      - ./mlartifacts:${PWD}/mlartifacts:ro
+      - ./artifacts/tokenizer:/app/artifacts/tokenizer:ro
+      - ./data/inference:/data/inference
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.18.0
+    user: "${UID:-1000}:${GID:-1000}"
+    command: >
+      mlflow server --backend-store-uri sqlite:////mlflow/mlflow.db
+      --host 0.0.0.0 --port 5000
+    volumes:
+      - ./mlflow.db:/mlflow/mlflow.db
+      - ./mlartifacts:${PWD}/mlartifacts:ro
+    ports:
+      - "5000:5000"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
