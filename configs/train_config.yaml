@@ -1,0 +1,84 @@
+# Training configuration: experiment tracking, search spaces, fine-tuning,
+# export and the latency budget. Data settings are in data_config.yaml.
+
+seed: 42
+
+mlflow:
+  # Local tracking: a SQLite backend and a local artifact folder, both under
+  # the repo root. `make mlflow-ui` serves the same store at localhost:5000.
+  tracking_db: mlflow.db
+  artifact_dir: mlartifacts
+  experiment_tabular: claim-triage-tabular
+  experiment_nlp: claim-triage-notes
+  # Registered models hold the ONNX artifacts that get served (Step 7) and
+  # judged by the champion/challenger gate (Step 5).
+  model_tabular: claim-triage-tabular
+  model_nlp: claim-triage-notes
+
+tabular:
+  target: is_high_cost
+  metric: pr_auc   # average precision: the right metric for a 4.6% positive rate
+  n_trials: 25
+  cv_folds: 4      # grouped by policy, on the training split only
+  # Domain knowledge the model must respect, enforced by LightGBM and checked
+  # by the directional tests (tests/behavioral). Both trends are visible in
+  # the training data: more powerful cars and newer cars have costlier claims.
+  monotone:
+    vehicle_power: 1    # more power, never a lower predicted risk
+    vehicle_age: -1     # older car, never a higher predicted risk
+  search_space:
+    learning_rate: {low: 0.01, high: 0.2, log: true}
+    num_leaves: {low: 8, high: 96}
+    min_child_samples: {low: 20, high: 300}
+    colsample_bytree: {low: 0.5, high: 1.0}
+    subsample: {low: 0.5, high: 1.0}
+    reg_lambda: {low: 0.001, high: 10.0, log: true}
+    n_estimators: {low: 100, high: 600}
+
+nlp:
+  target: claim_category
+  # Same pinned base model and revision as the tokenizer (data_config.yaml).
+  train_sample: 4000   # notes sampled from the training split (stratified)
+  epochs: 2
+  batch_size: 16
+  learning_rate: 0.0005
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.1
+    target_modules: [q_lin, v_lin]   # DistilBERT attention query and value
+
+export:
+  opset: 17
+  benchmark_runs: 300   # single-request calls per model for latency percentiles
+  latency_budget_p99_ms: 50
+  # ONNX Runtime threads per request. The API serves with this value, and the
+  # benchmark and the gate measure latency with it, so the gate judges the
+  # model as it is served. With 1 thread the INT8 note model's p99 was about
+  # 49-53 ms (over budget); with 2 it is about 40 ms.
+  inference_threads: 2
+
+gate:
+  # Champion vs challenger gate (src/evaluation/gate.py), judged on the
+  # untouched test split. All three checks must pass to promote.
+  experiment: model-gate
+  # 1. Primary metric (tabular PR-AUC, notes macro F1) must improve by at
+  #    least this much, relative to the champion.
+  min_relative_improvement: 0.005
+  # 2. No severe degradation on any slice: tabular slices may lose at most
+  #    10% of their PR-AUC (relative); note categories at most 0.02 F1.
+  max_slice_drop_tabular: 0.10
+  max_slice_drop_notes: 0.02
+  min_slice_positives: 10   # tabular slices with fewer positives are skipped as too noisy
+  tabular_slices:
+    young_drivers: "driver_age < 25"
+    senior_drivers: "driver_age >= 70"
+    old_vehicles: "vehicle_age > 15"
+    powerful_vehicles: "vehicle_power >= 10"
+    dense_areas: "log_density >= 8"
+  # 3. Latency: single-request p99 must stay under export.latency_budget_p99_ms.
+  latency_runs: 200
+  # With no champion yet, the first model must beat a naive baseline instead.
+  bootstrap:
+    tabular_min_lift: 1.5     # PR-AUC at least 1.5x the positive rate
+    notes_min_macro_f1: 0.5

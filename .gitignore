@@ -10,5 +10,17 @@ __pycache__/
 data/raw/openml_cache/
 *.duckdb.wal
 
-# CI outputs
+# CI outputs and the local MLflow store (models live in the registry)
+mlflow.db
+mlartifacts/
+mlruns/
+
+# Serving and monitoring outputs
+serving_bundle/
+data/inference/
 reports/
+
+# Model files: versioned in the MLflow registry, not git. The small JSON
+# results next to them (metrics, gate decisions, benchmark) are committed.
+*.onnx
+*.onnx.data

@@ -1,11 +1,13 @@
 # Single-command execution. `make help` lists every target.
 
 RUN := uv run
+export MLFLOW_DISABLE_AGENT_HINT := 1
 
-.PHONY: help install hooks lint typecheck test ci data push-data pull-data clean
+.PHONY: help install hooks lint typecheck test ci data features train train-tabular train-nlp \
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data clean
 
 help:  ## List targets
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-11s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 install:  ## Install dependencies from uv.lock and the git pre-commit hooks
 	uv sync --locked
@@ -27,6 +29,50 @@ ci: lint test  ## Everything CI runs
 
 data:  ## Fetch, stage and validate data (re-runs only changed stages)
 	$(RUN) dvc repro
+
+features:  ## Split, fit the preprocessor on train only, save the drift reference
+	$(RUN) dvc repro features
+
+train-tabular:  ## Tune LightGBM with Optuna, export ONNX, register in MLflow
+	$(RUN) python -m src.training.tabular
+
+train-nlp:  ## Fine-tune DistilBERT with LoRA, export ONNX FP32 + INT8, register
+	$(RUN) python -m src.training.nlp
+
+text-baseline:  ## TF-IDF + logistic regression baseline for the notes classifier
+	$(RUN) python -m src.training.text_baseline
+
+benchmark:  ## Single-request latency of every ONNX model (FP32 vs INT8)
+	$(RUN) python -m src.training.benchmark
+
+train: train-tabular train-nlp benchmark  ## Train both models and benchmark them
+
+mlflow-ui:  ## MLflow server on the local store: http://localhost:5000
+	$(RUN) mlflow server --backend-store-uri sqlite:///mlflow.db \
+		--default-artifact-root ./mlartifacts --host 127.0.0.1 --port 5000
+
+gate:  ## Champion vs challenger gate for both models (promotes only if all checks pass)
+	$(RUN) python -m src.evaluation.gate --model tabular; \
+	$(RUN) python -m src.evaluation.gate --model notes
+
+bundle:  ## Export the @champion models from MLflow into serving_bundle/
+	$(RUN) python -m src.serving.model_store
+
+serve:  ## Run the API locally from the MLflow registry: http://localhost:8000/docs
+	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) uvicorn src.serving.app:app --port 8000
+
+up:  ## Build and start API + MLflow + Prometheus + Grafana (docker compose)
+	mkdir -p data/inference
+	UID=$$(id -u) GID=$$(id -g) docker compose up --build -d
+
+down:  ## Stop the docker compose stack
+	docker compose down
+
+simulate:  ## Send 500 test claims through the API (SHIFT=1 for a drifted population)
+	$(RUN) python -m monitoring.simulate_traffic --n 500 $(if $(SHIFT),--shift,)
+
+drift:  ## Drift report (Evidently, own pinned env): logged requests vs training reference
+	uv run --script monitoring/drift_detector.py
 
 push-data:  ## Store data versions in the DVC remote
 	$(RUN) dvc push

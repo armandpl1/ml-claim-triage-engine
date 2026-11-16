@@ -1,0 +1,32 @@
+{
+  "metrics": {
+    "pr_auc": 0.09121036325384693,
+    "roc_auc": 0.6623960513600533,
+    "brier": 0.043346341116436427,
+    "f1": 0.1560798548094374,
+    "precision": 0.11684782608695653,
+    "recall": 0.23497267759562843,
+    "threshold": 0.074849954784325,
+    "positive_rate": 0.046142208774583963
+  },
+  "parity": {
+    "onnx_max_abs_diff": 1.3776010823751683e-07,
+    "onnx_decision_agreement": 0.9997478567826525
+  },
+  "best_params": {
+    "learning_rate": 0.010524388169774232,
+    "num_leaves": 58,
+    "min_child_samples": 274,
+    "colsample_bytree": 0.8674067432183943,
+    "subsample": 0.6223573341109078,
+    "reg_lambda": 0.04930321500224028,
+    "n_estimators": 143,
+    "subsample_freq": 1
+  },
+  "monotone": {
+    "vehicle_power": 1,
+    "vehicle_age": -1
+  },
+  "best_cv_pr_auc": 0.0851269482515452,
+  "run_id": "cc512263d9154b67a1c648f1fa53ecf0"
+}

@@ -1,0 +1,45 @@
+{
+  "runs_per_model": 300,
+  "threads": 2,
+  "latency": {
+    "tabular": {
+      "p50_ms": 0.047,
+      "p95_ms": 0.068,
+      "p99_ms": 0.08,
+      "mean_ms": 0.05
+    },
+    "notes_fp32": {
+      "p50_ms": 31.595,
+      "p95_ms": 53.814,
+      "p99_ms": 56.231,
+      "mean_ms": 37.978
+    },
+    "notes_fp32_with_tokenization": {
+      "p50_ms": 50.032,
+      "p95_ms": 57.956,
+      "p99_ms": 61.335,
+      "mean_ms": 51.163
+    },
+    "notes_int8": {
+      "p50_ms": 31.431,
+      "p95_ms": 36.192,
+      "p99_ms": 39.324,
+      "mean_ms": 31.922
+    },
+    "notes_int8_with_tokenization": {
+      "p50_ms": 31.432,
+      "p95_ms": 37.634,
+      "p99_ms": 40.975,
+      "mean_ms": 32.214
+    }
+  },
+  "int8_speedup_p50": 1.01,
+  "budget_p99_ms": 50,
+  "within_budget": {
+    "tabular": true,
+    "notes_fp32": false,
+    "notes_fp32_with_tokenization": false,
+    "notes_int8": true,
+    "notes_int8_with_tokenization": true
+  }
+}

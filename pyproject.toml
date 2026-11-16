@@ -4,18 +4,35 @@ version = "0.1.0"
 description = "Insurance claim triage: claim cost and severity models plus an NLP note classifier, served with FastAPI and monitored for drift."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
+# Shared by every part of the project, including the slim serving image.
 dependencies = [
-    "duckdb>=1.1",
     "numpy>=1.26",
+    "pyyaml>=6.0",
+]
+
+# Each group is one part of the system. `uv sync` installs all of them
+# locally; the Docker image installs only `serve`.
+[dependency-groups]
+# Ingestion, contracts and features (Steps 2-3)
+pipeline = [
+    "duckdb>=1.1",
     "pandas>=2.2",
     "pandera>=0.20",
     "pyarrow>=17",
-    "pyyaml>=6.0",
     "scikit-learn>=1.5",
 ]
-
-[dependency-groups]
+# The API (Step 7): inference only, no training libraries
+serve = [
+    "fastapi>=0.115",
+    "mlflow-skinny>=2.17",
+    "onnxruntime>=1.20",
+    "prometheus-client>=0.21",
+    "pydantic>=2.9",
+    "tokenizers>=0.20",
+    "uvicorn>=0.32",
+]
 dev = [
+    "httpx>=0.27",
     "dvc>=3.50",
     "mypy>=1.11",
     "pandas-stubs>=2.2",
@@ -24,8 +41,7 @@ dev = [
     "ruff>=0.6",
     "types-pyyaml>=6.0",
 ]
-# Training and NLP stack (Steps 3-4). Installed by default with `uv sync`;
-# the serving image (Step 7) installs only what inference needs.
+# Training, tuning, fine-tuning and export (Step 4)
 train = [
     "joblib>=1.4",
     "lightgbm>=4.5",
@@ -43,7 +59,7 @@ train = [
 
 [tool.uv]
 package = false
-default-groups = ["dev", "train"]
+default-groups = ["pipeline", "train", "serve", "dev"]
 
 # CPU-only PyTorch: skips ~2 GB of CUDA libraries a laptop CPU can't use.
 [tool.uv.sources]

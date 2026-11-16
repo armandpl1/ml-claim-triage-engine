@@ -1,0 +1,43 @@
+{
+  "epochs": [
+    {
+      "epoch": 0,
+      "train_loss": 0.5425,
+      "accuracy": 0.9233484619263742,
+      "macro_f1": 0.9078473641078897
+    },
+    {
+      "epoch": 1,
+      "train_loss": 0.3018,
+      "accuracy": 0.9248613212304589,
+      "macro_f1": 0.9088900965435169
+    }
+  ],
+  "resumed_from_onnx": true,
+  "run_id": "9e137e1f700e48a8adb7adff8b09fc39",
+  "onnx": {
+    "fp32": {
+      "accuracy": 0.9248613212304589,
+      "macro_f1": 0.9088900965435169,
+      "agreement_with_reference": 1.0,
+      "size_mb": 268.0
+    },
+    "int8": {
+      "accuracy": 0.9248613212304589,
+      "macro_f1": 0.9088211617522814,
+      "agreement_with_reference": 0.9997478567826525,
+      "size_mb": 67.4
+    }
+  },
+  "chosen_variant": "int8",
+  "int8_macro_f1_drop": 6.893479123548651e-05,
+  "parity_reference": "onnx_fp32",
+  "per_class_f1": {
+    "collision": 0.9399,
+    "theft": 0.9179,
+    "glass": 0.916,
+    "weather": 0.9022,
+    "bodily_injury": 0.8684
+  },
+  "model_version": "1"
+}
