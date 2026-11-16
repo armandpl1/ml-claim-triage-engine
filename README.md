@@ -2,16 +2,16 @@
 
 Real-time insurance claim triage: predict a claim's cost and whether it needs a senior adjuster, and classify the adjuster's note into a claim category. Everything runs locally on a laptop CPU with open-source tools.
 
-| Status  | Step                                           |
-| ------- | ---------------------------------------------- |
-| Done    | 1. Engineering foundation                      |
-| Done    | 2. Idempotent ingestion and data contracts     |
-| Planned | 3. Leakage-free feature pipelines              |
-| Planned | 4. Experiment tracking, tuning and fine-tuning |
-| Planned | 5. Champion vs challenger model gate           |
-| Planned | 6. Three-tier test suite                       |
-| Planned | 7. FastAPI serving in Docker                   |
-| Planned | 8. Observability, drift monitoring and CI/CD   |
+| Status | Step                                           |
+| ------ | ---------------------------------------------- |
+| Done   | 1. Engineering foundation                      |
+| Done   | 2. Idempotent ingestion and data contracts     |
+| Done   | 3. Leakage-free feature pipelines              |
+| Done   | 4. Experiment tracking, tuning and fine-tuning |
+| Done   | 5. Champion vs challenger model gate           |
+| Done   | 6. Three-tier test suite                       |
+| Done   | 7. FastAPI serving in Docker                   |
+| Done   | 8. Observability, drift monitoring and CI/CD   |
 
 ## Quick start
 
@@ -19,7 +19,10 @@ Requires Python 3.11 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 make install   # dependencies from uv.lock, plus the git hooks (ruff and mypy before every commit)
-make data      # download, stage and validate the data (~2 min the first time)
+make data      # download, stage, validate and split the data (~2 min the first time)
+make train     # tune the triage model, fine-tune the notes model, benchmark (~1-2 h on a CPU)
+make gate      # promote each challenger only if it beats the champion
+make serve     # the API at http://localhost:8000/docs, models from the MLflow registry
 make test      # all tests
 make help      # every command
 ```
@@ -40,7 +43,10 @@ The two are joined into one row per claim in `staging.claims` (26,444 claims). E
 **The notes are synthetic.** freMTPL2 has no text, so `src/ingestion/notes.py` generates one note per claim:
 - **From real features:** the category's chances depend on the claim amount, vehicle age and population density. Bodily injury is far more likely on expensive claims, glass on cheap ones.
 - **Severity wording:** the note's damage description follows the amount.
-- **Realistic noise:** 8% of notes contain a typo or adjuster shorthand.
+- **Realistic noise**, so the task isn't trivially easy (with clean templates, any model scored 100%):
+  - 10% of notes are vague ("Customer called to report damage at a supermarket car park. Assessment pending.") and 25% use wording that fits several categories.
+  - 3% of labels are deliberately wrong, as when a claim is miscoded in the claim system.
+  - About 3% of notes contain adjuster shorthand or a typo ("veh", "dmgd", "polcie"). The generator tries on 8% of notes, but only changes the note when the chosen word is in it.
 - **Deterministic:** each note is seeded by its `claim_id`, so the same claim always gets the same note on any machine.
 
 ## Step 1: Engineering foundation
@@ -111,15 +117,181 @@ They also prove that ingestion is deterministic and independent of source row or
 
 **One finding about the real data:** 54 claims have more than one year of exposure (up to 2.0). That's a known quirk of freMTPL2, so the exposure contract allows up to 2.01 rather than failing on real data.
 
+## Step 3: Leakage-free feature pipelines
+
+Leakage means a model sees information during training that it won't have when it predicts for real. Its scores then look better than it will perform. This step is built so leakage can't happen (`src/features/`, pipeline stage `features`):
+
+1. **Split first.** Claims are split 70/15/15 into train, validation and test before any statistic is computed.
+   - **Grouped by policy:** all claims of a policy land in the same split, so the model is never tested on a policy whose other claims it trained on.
+   - **Stratified:** each split keeps the overall high-cost rate (4.62%, 4.61%, 4.64%).
+2. **Fit on train only.** The preprocessor (median imputation for numbers, category codes for text columns) learns its values from the training split alone. Categories never seen in training map to "unknown" instead of failing.
+3. **Exclude what isn't known at prediction time.** `claim_amount` (the answer), `claim_seq` (ranks a policy's claims by amount), and `claim_count` (counts claims that haven't happened yet). Each exclusion and its reason is in `configs/data_config.yaml`.
+4. **One feature function for training and serving.** `log_density` is computed by the same code in both (`src/features/row.py`), and a test proves the API and the training pipeline produce identical model inputs.
+5. **Save a reference snapshot** of the training inputs for drift monitoring (Step 8).
+
+The stage writes `data/processed/feature_report.json` and fails if any policy appears in more than one split.
+
+| Split      | Claims | High-cost share | Policies shared with another split |
+| ---------- | ------ | --------------- | ---------------------------------- |
+| Train      | 18,509 | 4.62%           | 0                                  |
+| Validation | 3,966  | 4.61%           | 0                                  |
+| Test       | 3,969  | 4.64%           | 0                                  |
+
+The test split is touched only by the gate (Step 5), never during tuning.
+
+## Step 4: Experiment tracking, tuning and fine-tuning
+
+Every run is logged to **MLflow** (parameters, metrics, plots, the model), stored locally in `mlflow.db` and `mlartifacts/`. `make mlflow-ui` opens it. Trained models are registered in the MLflow **Model Registry**, and the newest version gets the alias `@challenger`.
+
+**Model 1, the triage model** (`src/training/tabular.py`): is this claim high-cost?
+- LightGBM, tuned by **Optuna** over 25 trials, scored by PR-AUC with 4-fold cross-validation grouped by policy. PR-AUC suits a rare target (4.6% positive) better than accuracy or ROC-AUC.
+- The decision threshold maximises F1 on validation and is stored with the model.
+- Exported to **ONNX** with its preprocessing in one graph. The ONNX and Python predictions differ by less than 2e-7.
+
+**Model 2, the notes classifier** (`src/training/nlp.py`): which of 5 categories does this note describe?
+- **DistilBERT fine-tuned with LoRA**: only small adapter matrices are trained (r 8, on the attention query and value layers), not the full 66M weights. 4,000 training notes, 2 epochs, on a CPU.
+- Exported to ONNX, then **quantized to INT8**. INT8 is kept only if it loses at most 0.005 macro F1.
+
+| Notes model              | Validation macro F1 | Size   |
+| ------------------------ | ------------------- | ------ |
+| DistilBERT FP32          | 0.9089              | 268 MB |
+| DistilBERT INT8 (served) | 0.9088              | 67 MB  |
+| TF-IDF + logistic reg.   | 0.9085              | < 1 MB |
+
+The INT8 model agrees with FP32 on 99.97% of validation notes.
+
+**Latency** (`src/training/benchmark.py`): one request at a time, 300 calls each, 2 threads (the API's setting).
+
+| Model                         | p50     | p99     | Within the 50 ms p99 budget |
+| ----------------------------- | ------- | ------- | --------------------------- |
+| Triage model (LightGBM)       | 0.05 ms | 0.08 ms | Yes                         |
+| Notes FP32                    | 31.6 ms | 56.2 ms | No                          |
+| Notes INT8                    | 31.4 ms | 39.3 ms | Yes                         |
+| Notes INT8, with tokenization | 31.4 ms | 41.0 ms | Yes                         |
+
+INT8's gain here is a 4x smaller model and a shorter tail (p99 30% lower), not a faster median. With one thread, the INT8 p99 sat right at the 50 ms budget, so the benchmark, the gate and the API all use 2 threads (`export.inference_threads`).
+
+### Honest findings
+
+- **The triage model is weak, and that's the data.** Test PR-AUC is 0.077 against a 0.046 base rate: 1.7x better than guessing, which is useful for ranking claims but far from reliable. Policy features (car, driver, area) say little about how expensive a claim will be. The notes would help, but their severity wording is generated from the claim amount, so using them would be leakage, not skill.
+- **DistilBERT doesn't beat the TF-IDF baseline** (`make text-baseline`; test macro F1 0.9092 vs 0.9087). The synthetic notes come from templates, so word counts already separate them, and the ceiling is set by the 3% wrong labels and the ambiguous notes. On real adjuster notes the transformer may earn its cost. On this data, the cheap baseline would be the right production choice. The fine-tuning pipeline is kept to show the full LoRA, ONNX and INT8 workflow.
+
+## Step 5: Champion vs challenger model gate
+
+`src/evaluation/gate.py` decides whether `@challenger` replaces `@champion`, scoring both on the untouched test split. All three checks must pass:
+
+| Check          | Rule                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| Primary metric | At least 0.5% better than the champion (PR-AUC for triage, macro F1 for notes)                    |
+| Slices         | No slice loses more than 10% PR-AUC (triage) or 0.02 F1 (notes), so an average can't hide a group |
+| Latency        | Single-request p99 at most 50 ms                                                                  |
+
+- **Triage slices:** young drivers, senior drivers, old vehicles, powerful vehicles, dense areas. A slice with fewer than 10 high-cost claims is skipped as too noisy.
+- **Notes slices:** each category, and notes with shorthand or typos.
+- **First model:** with no champion yet, the challenger must beat a naive baseline instead: 1.5x the positive rate (triage), or macro F1 0.5 (notes).
+- **On promotion,** the old champion keeps the alias `@previous_champion`, so rollback is one alias change. A rejected version is tagged `gate_decision=rejected`. Every decision is an MLflow run and a JSON report in `artifacts/gate/`.
+
+**What happened on the real models:**
+
+| Model     | Challenger                   | Result                                                                  |
+| --------- | ---------------------------- | ----------------------------------------------------------------------- |
+| Triage v1 | First model                  | Promoted: test PR-AUC 0.0774 vs a 0.0695 floor; p99 0.07 ms             |
+| Notes v1  | First model                  | Promoted: macro F1 0.9087 vs a 0.5 floor; p99 41.9 ms                   |
+| Triage v2 | v1 plus monotone constraints | **Rejected**: PR-AUC 0.0738 vs 0.0774; dense areas slice 0.125 -> 0.100 |
+
+Triage v2 forces two business rules on the model: more vehicle power never lowers the predicted risk, and an older vehicle never raises it. It scored *better* on validation (PR-AUC 0.0912 vs 0.0898) but worse on the untouched test split. That's exactly the regression the gate exists to catch, so v1 stays in production.
+
+The notes "with typos" slice: a bug made "veh" match inside "vehicle", so the first notes gate report counts 1,122 such notes. Fixed and tested (`tests/unit/test_scoring.py`); there are really 118, and the champion scores 0.9033 macro F1 on them vs 0.9087 overall. This first gate didn't check slices (no champion yet), so the decision was unaffected.
+
+## Step 6: Three-tier test suite
+
+`make test` runs all three tiers (104 tests).
+
+| Tier        | Folder               | What it proves                                                                                                                                                      |
+| ----------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit        | `tests/unit/`        | Contracts reject bad data; the split doesn't leak; the gate's rules; the API rejects bad input; training and serving compute identical features and tokens          |
+| Behavioral  | `tests/behavioral/`  | Models behave sensibly: with the monotone rules, more power never lowers risk; non-feature columns change nothing; typos and capitals barely move a note's category |
+| Integration | `tests/integration/` | 100 claims through the whole pipeline in under 15 s: ingest, validate, split, train, ONNX, the real API, the inference log, with identical training and API results |
+
+The triage behavior tests train a small model on fixture data, so they always run, including in CI. They also run on the trained model when it was trained with the monotone rules. The notes tests need the trained notes model, and skip without it (a fresh clone, or CI).
+
+## Step 7: FastAPI serving in Docker
+
+`src/serving/app.py`:
+
+| Endpoint        | Returns                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------- |
+| `GET /health`   | Model versions, where they were loaded from, uptime                                          |
+| `POST /predict` | High-cost probability and route (`senior_adjuster` or `standard`), plus the note's category  |
+| `GET /metrics`  | Prometheus metrics: requests by status, latency histogram, routes, note categories, versions |
+
+- **Input validation:** request limits mirror the data contracts. Out-of-range or unknown fields get a 422 naming each bad field.
+- **Models load once at startup,** from the MLflow registry (`@champion`) or from a bundle folder exported by `make bundle`. Only ONNX Runtime and the `tokenizers` library run them: no PyTorch, scikit-learn or pandas in the image.
+- **Every prediction is logged** to a SQLite inference log in a background task, after the response is sent, so logging adds no latency.
+- **Docker:** a multi-stage `Dockerfile` installs only the `serve` dependency group, runs as a non-root user, and has a health check. `make up` starts the API, MLflow, Prometheus and Grafana with `docker compose`.
+
+**Verified locally:** `/health` reported both champions loaded from the registry; one claim with a note took 22.9 ms end to end; a bad request returned 422 naming each bad field; `/metrics` counted all of it; the prediction landed in the inference log. Serving from the bundle gave the same prediction to six decimal places.
+
+One bug found this way: MLflow stores the notes model's weights in a separate file beside the `.onnx` graph, and the bundle copied only the graph. The bundle now saves each model as one self-contained file, with a regression test.
+
+## Step 8: Observability, drift monitoring and CI/CD
+
+**Dashboards.** Prometheus scrapes `/metrics`. Grafana (http://localhost:3000 after `make up`) has a provisioned dashboard: request rate, error share, p95/p99 latency, share routed to senior adjusters, note categories and model versions.
+
+**Drift** (`monitoring/drift_detector.py`, `make drift`) compares logged requests with the training reference using **Evidently**:
+- each input feature (Wasserstein distance for numbers, Jensen-Shannon for categories on samples this size)
+- words per note (the text the notes model sees)
+- predicted note categories vs training categories (prediction drift)
+
+It writes `reports/drift_report.html` and `.json`, and exits 1 with a `drift_alert` log line when 30% or more of the monitored columns drift. With fewer than 200 requests it exits 2: too few to judge.
+
+Evidently 0.7 doesn't run on pandas 3, which the rest of the project uses. So the detector has its own pinned environment (declared in the script, locked in `drift_detector.py.lock`), the way a drift job runs as its own scheduled container.
+
+**Drill** (`make simulate`, then `make drift`, 500 requests each):
+
+| Traffic                                                                           | Drifted columns | Result        |
+| --------------------------------------------------------------------------------- | --------------- | ------------- |
+| Test-split claims, unchanged                                                      | 0 of 12         | No alert      |
+| Shifted: vehicles 8 years older, drivers 12 years younger, 6x density, 80% diesel | 4 of 12         | Alert, exit 1 |
+
+The alert named exactly the four shifted columns. A first version alerted on the *unchanged* traffic: it applied a p-value threshold (0.05) to distance tests, which use 0.1. Each test now uses its own default threshold.
+
+**CI/CD** (`.github/workflows/`):
+
+| Workflow            | When                             | What                                                                                                        |
+| ------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `ci.yml`            | Every pull request, push to main | Lint and types; the drift detector's lockfile and a no-data run; all tests; build the image, import the API |
+| `cd-model-gate.yml` | Weekly, or on demand             | Rebuild the data, retrain the triage model (8 trials), run the gate; upload the model, metrics and report   |
+
+Actions are pinned to commit SHAs, the token is read-only, every job has a timeout.
+
+## Running the heavy steps on a laptop
+
+Fine-tuning and Optuna can use several GB of RAM. Running two at once got processes killed by the Linux out-of-memory daemon, including the desktop session. Run one heavy job at a time, ideally in a memory-capped scope:
+
+```bash
+systemd-run --user --scope -p MemoryMax=2500M -p MemorySwapMax=0 nice -n 19 uv run python -m src.training.tabular
+```
+
+The notes ONNX evaluation runs in batches, so its memory stays flat.
+
 ## Project layout
 
 ```
-configs/data_config.yaml    sources, paths, target threshold, every contract threshold
-src/common/                 config loading, structured JSON logging
-src/ingestion/              fetch_data.py (download, clean, join, store), notes.py
-src/validation/             contracts.py (Pandera contracts, fail-fast alerts)
-tests/unit/                 ingestion, notes and contract tests
-dvc.yaml, dvc.lock          data pipeline and the versions of its outputs
-data/                       raw downloads, warehouse, reports (versioned by DVC, not git)
-Makefile                    single-command execution (make help)
+configs/data_config.yaml     sources, paths, contracts, features, tokenizer, monitoring
+configs/train_config.yaml    tuning, fine-tuning, export, latency budget, gate rules
+src/common/                  config loading, structured JSON logging
+src/ingestion/               fetch_data.py (download, clean, join, store), notes.py
+src/validation/              contracts.py (Pandera contracts, fail-fast alerts)
+src/features/                split, preprocessing, tokenizer, shared row features
+src/training/                tabular.py, nlp.py, onnx_export.py, benchmark.py, text_baseline.py
+src/evaluation/              scoring.py (scorecards), gate.py (champion vs challenger)
+src/serving/                 FastAPI app, schemas, model loading, tokenizer
+monitoring/                  drift detector, traffic simulator, Prometheus and Grafana config
+tests/                       unit/, behavioral/, integration/
+artifacts/                   metrics, gate decisions and benchmark (JSON); models live in MLflow
+Dockerfile, docker-compose.yml  serving image; API + MLflow + Prometheus + Grafana
+dvc.yaml, dvc.lock           data pipeline and the versions of its outputs
+data/                        raw downloads, warehouse, splits (versioned by DVC, not git)
+Makefile                     single-command execution (make help)
 ```

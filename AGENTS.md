@@ -44,6 +44,16 @@ on every change.
 - **Log every experiment to MLflow:** parameters, metrics and artifacts.
 - **Gate promotion:** a model replaces `@champion` only if the evaluation gate
   passes (metric, slices, latency).
+- **Report the honest result.** If a baseline matches the model, or the gate
+  rejects a change, say so in the README with the numbers.
+- **One heavy job at a time.** Training, tuning and ONNX evaluation can use
+  several GB of RAM; two at once got the desktop session killed by the
+  out-of-memory daemon. Run them in a capped scope:
+  `systemd-run --user --scope -p MemoryMax=2500M -p MemorySwapMax=0 nice -n 19 <cmd>`.
+- **The drift detector has its own environment** (inline script metadata in
+  `monitoring/drift_detector.py`, locked in `drift_detector.py.lock`), because
+  Evidently doesn't run on pandas 3. Change its pins with
+  `uv lock --script monitoring/drift_detector.py`.
 
 ## Python standards
 
@@ -75,11 +85,16 @@ on every change.
 
 ## Harnesses
 
-| Tool                                        | Use it to                                          |
-| ------------------------------------------- | -------------------------------------------------- |
-| `make help`                                 | List every command                                 |
-| `make ci`                                   | Run everything CI runs, locally                    |
-| `make data`                                 | Run the data pipeline (only changed stages re-run) |
-| `dvc status`                                | See which pipeline stages are out of date          |
-| `data/processed/validation_report.json`     | Latest contract results                            |
-| `uv run python -m src.validation.contracts` | Re-check contracts on the warehouse                |
+| Tool                                        | Use it to                                                     |
+| ------------------------------------------- | ------------------------------------------------------------- |
+| `make help`                                 | List every command                                            |
+| `make ci`                                   | Run everything CI runs, locally                               |
+| `make data`                                 | Run the data pipeline (only changed stages re-run)            |
+| `dvc status`                                | See which pipeline stages are out of date                     |
+| `data/processed/validation_report.json`     | Latest contract results                                       |
+| `uv run python -m src.validation.contracts` | Re-check contracts on the warehouse                           |
+| `make mlflow-ui`                            | Browse experiments, runs and registered model versions        |
+| `make gate`                                 | Champion vs challenger decision; reports in `artifacts/gate/` |
+| `make text-baseline`                        | The TF-IDF baseline the notes model must beat                 |
+| `make serve`                                | Run the API locally from the MLflow registry                  |
+| `make simulate`, `make drift`               | Send test traffic (`SHIFT=1` to drift it), then check drift   |
