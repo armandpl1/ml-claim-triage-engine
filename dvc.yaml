@@ -1,0 +1,28 @@
+# Data pipeline. `dvc repro` re-runs only the stages whose inputs changed;
+# `dvc push` stores the outputs in the remote (a local folder standing in
+# for cloud object storage such as S3).
+stages:
+  fetch:
+    cmd: python -m src.ingestion.fetch_data
+    deps:
+      - src/ingestion
+      - src/common
+      - configs/data_config.yaml
+    outs:
+      # persist: keep the downloads between runs so the fetch stays idempotent
+      - data/raw/policies.parquet:
+          persist: true
+      - data/raw/claim_amounts.parquet:
+          persist: true
+      - data/warehouse.duckdb
+
+  validate:
+    cmd: python -m src.validation.contracts
+    deps:
+      - src/validation
+      - src/common
+      - configs/data_config.yaml
+      - data/warehouse.duckdb
+    metrics:
+      - data/processed/validation_report.json:
+          cache: false

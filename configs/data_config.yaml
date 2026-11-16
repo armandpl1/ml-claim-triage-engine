@@ -1,0 +1,49 @@
+# Data configuration: sources, paths, targets and data contracts.
+# Every threshold the pipeline uses lives here, not in code.
+
+source:
+  # French Motor Third-Party Liability (freMTPL2) on OpenML
+  policies_openml_id: 41214   # freMTPL2freq: one row per policy
+  claims_openml_id: 41215     # freMTPL2sev: one row per claim, with its amount
+
+paths:
+  raw_dir: data/raw
+  warehouse: data/warehouse.duckdb
+  processed_dir: data/processed
+  reference_dir: data/reference
+  validation_report: data/processed/validation_report.json
+
+seed: 42
+
+targets:
+  # Claims above this amount (EUR) are routed to senior adjusters.
+  high_cost_threshold: 5000
+
+notes:
+  # Synthetic adjuster notes: one per claim, labeled with a category.
+  categories: [collision, theft, glass, weather, bodily_injury]
+  typo_rate: 0.08   # share of notes with a realistic typo
+
+contracts:
+  driver_age: {min: 16, max: 100}
+  vehicle_age: {min: 0, max: 100}
+  vehicle_power: {min: 1, max: 20}
+  bonus_malus: {min: 50, max: 350}
+  # Policy years in force. Mostly (0, 1]; the source has a few renewals
+  # recorded up to 2.0 years, so the contract allows them.
+  exposure: {min: 0.0, max: 2.01}
+  claim_amount: {min: 0.01}
+  areas: [A, B, C, D, E, F]
+  fuel_types: [Regular, Diesel]
+  # Target balance: fail if the high-cost share drifts outside this range.
+  high_cost_share: {min: 0.02, max: 0.40}
+  # Every note category must make up at least this share of claims.
+  min_category_share: 0.03
+  min_rows: 1000
+  # Claims whose policy is missing are dropped; fail if more than this share.
+  max_orphan_claim_share: 0.02
+
+split:
+  train: 0.70
+  validation: 0.15
+  test: 0.15

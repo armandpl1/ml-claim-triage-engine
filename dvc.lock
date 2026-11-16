@@ -1,0 +1,58 @@
+schema: '2.0'
+stages:
+  fetch:
+    cmd: python -m src.ingestion.fetch_data
+    deps:
+    - path: configs/data_config.yaml
+      hash: md5
+      md5: 96b8271cd1bc1f05a5faa3ec3a012a26
+      size: 1638
+    - path: src/common
+      hash: md5
+      md5: eb5f9164a65aed8ebbca79bf3caf3fbe.dir
+      size: 2250
+      nfiles: 3
+    - path: src/ingestion
+      hash: md5
+      md5: 6363a1d5109277611182b431781fde79.dir
+      size: 12474
+      nfiles: 3
+    outs:
+    - path: data/raw/claim_amounts.parquet
+      hash: md5
+      md5: a8873ea9d31b74bf035c99c718aa3215
+      size: 267889
+    - path: data/raw/policies.parquet
+      hash: md5
+      md5: 45a9bb10a211d3c0fe3c670d4c9b7213
+      size: 7431950
+    - path: data/warehouse.duckdb
+      hash: md5
+      md5: 799a3e1b935e6c219df4eb5a37d5581d
+      size: 9711616
+  validate:
+    cmd: python -m src.validation.contracts
+    deps:
+    - path: configs/data_config.yaml
+      hash: md5
+      md5: 96b8271cd1bc1f05a5faa3ec3a012a26
+      size: 1638
+    - path: data/warehouse.duckdb
+      hash: md5
+      md5: 799a3e1b935e6c219df4eb5a37d5581d
+      size: 9711616
+    - path: src/common
+      hash: md5
+      md5: eb5f9164a65aed8ebbca79bf3caf3fbe.dir
+      size: 2250
+      nfiles: 3
+    - path: src/validation
+      hash: md5
+      md5: a3cc1d1759bb617c59ff1e23536cd0a6.dir
+      size: 7193
+      nfiles: 2
+    outs:
+    - path: data/processed/validation_report.json
+      hash: md5
+      md5: 3a031ba1b663bbae39e04fcbe78603af
+      size: 211

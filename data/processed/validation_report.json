@@ -1,0 +1,12 @@
+{
+  "table": "staging.claims",
+  "rows": 26444,
+  "passed": true,
+  "failures": [],
+  "lineage": {
+    "check": "max_orphan_claim_share",
+    "orphan_share": 0.00732,
+    "limit": 0.02,
+    "passed": true
+  }
+}

@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Data: tracked by DVC, not git (DVC adds the specific outputs itself)
+data/raw/openml_cache/
+*.duckdb.wal
+
+# CI outputs
+reports/

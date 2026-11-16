@@ -1,0 +1,49 @@
+# Checks that run before every commit, and again in CI.
+# Bad formatting or type errors never enter the commit history.
+#
+# Set up once:   make hooks
+# Run by hand:   make lint
+#
+# Python tools run through `uv run`, so they use exactly the versions pinned
+# in uv.lock, locally and in CI.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: ruff-lint
+        name: ruff (lint)
+        entry: uv run ruff check
+        language: system
+        types: [python]
+
+      - id: ruff-format
+        name: ruff (format check)
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy (types)
+        entry: uv run mypy src
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: uv-lock
+        name: uv.lock is up to date
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
