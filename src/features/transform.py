@@ -25,14 +25,17 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
+from src.features.row import DENSITY_FLOOR
+
 UNKNOWN_CATEGORY = -1
 
 
 def add_row_features(df: pd.DataFrame) -> pd.DataFrame:
     """Derived columns that depend only on the row itself."""
     out = df.copy()
-    density = pd.to_numeric(out["density"], errors="coerce").clip(lower=1)
-    out["log_density"] = np.log(density)
+    # Same rule as row.log_density (used by serving), vectorized.
+    density = pd.to_numeric(out["density"], errors="coerce").fillna(DENSITY_FLOOR)
+    out["log_density"] = np.log(density.clip(lower=DENSITY_FLOOR))
     return out
 
 
@@ -40,19 +43,14 @@ def build_preprocessor(cfg: dict[str, Any]) -> ColumnTransformer:
     """Unfitted preprocessor for the tabular model. Fit it on training data only."""
     features = cfg["features"]
     numeric = Pipeline([("impute", SimpleImputer(strategy="median"))])
-    categorical = Pipeline(
-        [
-            ("impute", SimpleImputer(strategy="constant", fill_value="__missing__")),
-            (
-                "encode",
-                OrdinalEncoder(
-                    handle_unknown="use_encoded_value",
-                    unknown_value=UNKNOWN_CATEGORY,
-                    encoded_missing_value=UNKNOWN_CATEGORY,
-                    dtype=np.float32,
-                ),
-            ),
-        ]
+    # Missing and never-seen categories both become UNKNOWN_CATEGORY. In
+    # scikit-learn a missing value is NaN; in ONNX (no NaN for strings) the
+    # caller sends "", which is also unseen, so both paths give the same code.
+    categorical = OrdinalEncoder(
+        handle_unknown="use_encoded_value",
+        unknown_value=UNKNOWN_CATEGORY,
+        encoded_missing_value=UNKNOWN_CATEGORY,
+        dtype=np.float32,
     )
     return ColumnTransformer(
         [

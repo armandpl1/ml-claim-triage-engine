@@ -15,17 +15,23 @@ CONFIG_DIR = ROOT / "configs"
 # Point to a different data config file, e.g. for tests or a strict-contract
 # drill: CLAIM_TRIAGE_DATA_CONFIG=/path/to/config.yaml
 CONFIG_OVERRIDE_ENV = "CLAIM_TRIAGE_DATA_CONFIG"
+# Same for the training config, e.g. fewer tuning trials in CI.
+TRAIN_CONFIG_OVERRIDE_ENV = "CLAIM_TRIAGE_TRAIN_CONFIG"
 
 
 def load_config(name: str = "data_config.yaml") -> dict[str, Any]:
     """Read a config file from configs/ as a dictionary.
 
-    For the data config, CLAIM_TRIAGE_DATA_CONFIG (if set) points to a
-    replacement file.
+    CLAIM_TRIAGE_DATA_CONFIG and CLAIM_TRIAGE_TRAIN_CONFIG (if set) point to
+    replacement files for data_config.yaml and train_config.yaml.
     """
     path = CONFIG_DIR / name
-    if name == "data_config.yaml" and os.environ.get(CONFIG_OVERRIDE_ENV):
-        path = Path(os.environ[CONFIG_OVERRIDE_ENV])
+    override = {
+        "data_config.yaml": CONFIG_OVERRIDE_ENV,
+        "train_config.yaml": TRAIN_CONFIG_OVERRIDE_ENV,
+    }.get(name)
+    if override and os.environ.get(override):
+        path = Path(os.environ[override])
     with path.open() as f:
         config: dict[str, Any] = yaml.safe_load(f)
     return config

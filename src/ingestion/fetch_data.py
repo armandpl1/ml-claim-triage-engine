@@ -122,9 +122,19 @@ def build_claims(
     claims = matched.drop(columns="source_row").merge(policies, on="policy_id", how="inner")
     claims["is_high_cost"] = claims["claim_amount"] > cfg["targets"]["high_cost_threshold"]
 
-    seed, typo_rate = cfg["seed"], cfg["notes"]["typo_rate"]
+    seed, note_cfg = cfg["seed"], cfg["notes"]
     notes = [
-        generate_note(cid, amount, int(age), int(density), seed, typo_rate)
+        generate_note(
+            cid,
+            amount,
+            int(age),
+            int(density),
+            seed,
+            typo_rate=note_cfg["typo_rate"],
+            vague_rate=note_cfg["vague_rate"],
+            ambiguous_rate=note_cfg["ambiguous_rate"],
+            label_noise_rate=note_cfg["label_noise_rate"],
+        )
         for cid, amount, age, density in zip(
             claims["claim_id"],
             claims["claim_amount"],

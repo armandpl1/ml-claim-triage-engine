@@ -22,7 +22,10 @@ targets:
 notes:
   # Synthetic adjuster notes: one per claim, labeled with a category.
   categories: [collision, theft, glass, weather, bodily_injury]
-  typo_rate: 0.08   # share of notes with a realistic typo
+  typo_rate: 0.08          # share of notes with a realistic typo
+  vague_rate: 0.10         # uninformative notes, the same for every category
+  ambiguous_rate: 0.25     # true category, wording that overlaps another one
+  label_noise_rate: 0.03   # labels miscoded in the claim system
 
 contracts:
   driver_age: {min: 16, max: 100}
@@ -75,3 +78,15 @@ text:
   tokenizer: distilbert/distilbert-base-uncased
   revision: 12040accade4e8a0f71eabdb258fecc2e7e948be
   max_length: 48
+
+monitoring:
+  # monitoring/drift_detector.py: logged API requests vs data/reference/.
+  inference_log: data/inference/inference_log.db
+  report_dir: reports
+  min_rows: 200          # fewer requests than this: too few to judge drift
+  # Per-column tests use Evidently's defaults for the sample size: K-S and
+  # chi-square (drifted if p < 0.05) on small samples, Wasserstein and
+  # Jensen-Shannon distance (drifted if >= 0.1) on large ones. Don't set one
+  # threshold for all: a p-value and a distance mean opposite things.
+  # Alert when this share of monitored columns has drifted.
+  alert_drift_share: 0.3

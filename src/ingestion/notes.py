@@ -14,6 +14,18 @@ trivial:
       population density
     - wording mentions damage severity, which correlates with the amount
     - a share of notes contain a realistic typo or abbreviation
+
+Like real adjuster notes, they are messy (rates in configs/data_config.yaml):
+    regular     wording typical of the category
+    ambiguous   written in the true category, with wording that overlaps
+                another one (a collision that shatters the windscreen, a
+                theft through a broken window, a weather skid into a wall)
+    vague       the same few uninformative templates for every category
+    miscoded    a small share of labels is set to the wrong category, as in
+                real claim systems
+
+So no model can reach 100%: an earlier version with only regular notes was
+perfectly separable, which made fine-tuning and the champion gate meaningless.
 """
 
 from __future__ import annotations
@@ -50,6 +62,38 @@ TEMPLATES = {
         "Insured and passenger injured at {place}: {injury}. Medical reports pending.",
     ],
 }
+
+# Written in the true category, with wording that overlaps another category.
+AMBIGUOUS_TEMPLATES = {
+    "collision": [
+        "Windscreen shattered when insured hit a {obstacle} at {place}. {severity} {part} damage.",
+        "Skidded during {weather} and hit a {obstacle} near {place}. {severity} {part} damage.",
+    ],
+    "theft": [
+        "Side window smashed at {place}, {stolen} taken from the car.",
+        "Vehicle broken into during {weather} at {place}, {stolen} missing.",
+    ],
+    "glass": [
+        "Minor bump at {place}, windscreen cracked. No other damage.",
+        "Window smashed by vandals at {place}, nothing taken.",
+    ],
+    "weather": [
+        "Strong winds pushed vehicle into a {obstacle} at {place}. {severity} damage to {part}.",
+        "Hail broke the windscreen while parked at {place}.",
+    ],
+    "bodily_injury": [
+        "Collision at {place}, driver reported {injury} the next day.",
+        "Vehicle hit a {obstacle} during {weather}, passenger mentions {injury}.",
+    ],
+}
+
+# Uninformative notes, shared by every category.
+VAGUE_TEMPLATES = [
+    "Customer called to report damage at {place}. Assessment pending.",
+    "Claim opened, {severity} damage reported, awaiting photos.",
+    "Third party involved at {place}, details to follow.",
+    "Insured reported incident at {place}. Adjuster visit booked.",
+]
 
 SLOTS = {
     "impact": ["collided with another car", "skidded into a barrier", "hit a parked vehicle"],
@@ -131,15 +175,27 @@ def generate_note(
     density: int,
     seed: int,
     typo_rate: float = 0.08,
+    vague_rate: float = 0.0,
+    ambiguous_rate: float = 0.0,
+    label_noise_rate: float = 0.0,
 ) -> tuple[str, str]:
-    """Return (category, note text) for one claim. Deterministic per claim_id."""
+    """Return (category label, note text) for one claim. Deterministic per claim_id."""
     rng = random.Random(stable_seed(seed, claim_id))
     category = rng.choices(CATEGORIES, category_weights(amount, vehicle_age, density))[0]
-    template = rng.choice(TEMPLATES[category])
+    style = rng.random()
+    if style < vague_rate:
+        template = rng.choice(VAGUE_TEMPLATES)
+    elif style < vague_rate + ambiguous_rate:
+        template = rng.choice(AMBIGUOUS_TEMPLATES[category])
+    else:
+        template = rng.choice(TEMPLATES[category])
     fills = {slot: rng.choice(options) for slot, options in sorted(SLOTS.items())}
     fills["severity"] = rng.choice(SEVERITY_WORDS[severity_band(amount)])
     text = template.format(**fills)
     if rng.random() < typo_rate:
         word, typo = rng.choice(TYPOS)
         text = text.replace(word, typo).replace(word.capitalize(), typo.capitalize())
-    return category, text
+    label = category
+    if rng.random() < label_noise_rate:  # miscoded in the claim system
+        label = rng.choice([c for c in CATEGORIES if c != category])
+    return label, text
