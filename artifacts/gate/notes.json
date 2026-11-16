@@ -1,0 +1,56 @@
+{
+  "model": "claim-triage-notes",
+  "kind": "notes",
+  "champion_version": null,
+  "challenger_version": "1",
+  "promoted": true,
+  "checks": [
+    {
+      "name": "beats_naive_baseline",
+      "passed": true,
+      "detail": "0.9087 vs 0.5000 (the minimum macro F1)"
+    },
+    {
+      "name": "latency_within_budget",
+      "passed": true,
+      "detail": "p99 41.94 ms vs budget 50 ms"
+    }
+  ],
+  "challenger": {
+    "primary": 0.9087249390430188,
+    "slices": {
+      "category_collision": {
+        "metric": 0.9324389075227599,
+        "rows": 1955
+      },
+      "category_theft": {
+        "metric": 0.8972746331236897,
+        "rows": 513
+      },
+      "category_glass": {
+        "metric": 0.9180529882932841,
+        "rows": 862
+      },
+      "category_weather": {
+        "metric": 0.8843537414965986,
+        "rows": 397
+      },
+      "category_bodily_injury": {
+        "metric": 0.911504424778761,
+        "rows": 242
+      },
+      "notes_with_typos": {
+        "metric": 0.6828908345955413,
+        "rows": 1122
+      }
+    },
+    "latency": {
+      "p50_ms": 31.178434500361618,
+      "p95_ms": 37.232917249730235,
+      "p99_ms": 41.93652840025605,
+      "mean_ms": 32.15962620497976
+    },
+    "baseline": 0.13200540175557057
+  },
+  "champion": null
+}

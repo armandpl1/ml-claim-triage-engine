@@ -1,0 +1,88 @@
+{
+  "model": "claim-triage-tabular",
+  "kind": "tabular",
+  "champion_version": "1",
+  "challenger_version": "2",
+  "promoted": false,
+  "checks": [
+    {
+      "name": "primary_metric_improves",
+      "passed": false,
+      "detail": "challenger 0.0738 vs champion 0.0774 (needs >= 0.0778)"
+    },
+    {
+      "name": "no_slice_degrades",
+      "passed": false,
+      "detail": "dense_areas: 0.1250 -> 0.1000"
+    },
+    {
+      "name": "latency_within_budget",
+      "passed": true,
+      "detail": "p99 0.07 ms vs budget 50 ms"
+    }
+  ],
+  "challenger": {
+    "primary": 0.07379347215685558,
+    "slices": {
+      "young_drivers": {
+        "metric": 0.05474158896237437,
+        "rows": 293,
+        "positives": 11
+      },
+      "senior_drivers": {
+        "metric": 0.06774737651530068,
+        "rows": 277,
+        "positives": 14
+      },
+      "powerful_vehicles": {
+        "metric": 0.1585865501971044,
+        "rows": 361,
+        "positives": 19
+      },
+      "dense_areas": {
+        "metric": 0.10003865375956957,
+        "rows": 768,
+        "positives": 34
+      }
+    },
+    "latency": {
+      "p50_ms": 0.054188499689189484,
+      "p95_ms": 0.06119999975453536,
+      "p99_ms": 0.0691557399204612,
+      "mean_ms": 0.05508033496880671
+    },
+    "baseline": 0.04635928445452255
+  },
+  "champion": {
+    "primary": 0.07743423745524267,
+    "slices": {
+      "young_drivers": {
+        "metric": 0.05091143950034336,
+        "rows": 293,
+        "positives": 11
+      },
+      "senior_drivers": {
+        "metric": 0.06260765239806267,
+        "rows": 277,
+        "positives": 14
+      },
+      "powerful_vehicles": {
+        "metric": 0.1629966771187066,
+        "rows": 361,
+        "positives": 19
+      },
+      "dense_areas": {
+        "metric": 0.12499639048403127,
+        "rows": 768,
+        "positives": 34
+      }
+    },
+    "latency": {
+      "p50_ms": 0.0585825000598561,
+      "p95_ms": 0.07566530011899868,
+      "p99_ms": 0.09915520024151186,
+      "mean_ms": 0.061314114991546376
+    },
+    "baseline": 0.04635928445452255
+  }
+}
