@@ -63,9 +63,17 @@ How Step 1 was verified:
 
 **Ingestion** (`src/ingestion/fetch_data.py`):
 1. Downloads both datasets from OpenML, cached as Parquet in `data/raw/`. Later runs skip the download (`--force` refreshes it).
-2. Cleans columns: snake_case names, integer IDs, and quotes stripped from values such as `'Regular'`.
-3. Joins claims to policies. **195 claims (0.7%) have no matching policy.** They are dropped and logged as a warning, not lost silently.
-4. Adds `claim_id`, the target and the notes, then writes `raw.policies`, `raw.claim_amounts` and `staging.claims` to `data/warehouse.duckdb`. Tables are replaced on every run, so running twice gives identical tables.
+2. Lands the downloads **untouched** in `raw.policies` and `raw.claim_amounts`, with the source's own column names and values, so any problem can be traced back to exactly what was received.
+3. Cleans columns in memory: snake_case names, integer IDs, and quotes stripped from values such as `'Regular'`.
+4. Joins claims to policies. **195 claims (0.7%) have no matching policy.** They are dropped and logged as a warning, not lost silently.
+5. Adds `claim_id`, the target and the notes.
+6. **Validates in memory.** If any contract fails, the run logs one alert and halts with exit status 1, and `staging.*` stays exactly as it was.
+7. Only then writes `staging.policies` and `staging.claims`, in one transaction. Tables are replaced on every run, so running twice gives identical tables.
+
+| Schema    | Tables                             | Contents                                                  |
+| --------- | ---------------------------------- | --------------------------------------------------------- |
+| `raw`     | `policies`, `claim_amounts`        | As downloaded, never modified                             |
+| `staging` | `policies`, `claims` (primary key) | Cleaned and joined, written only after the contracts pass |
 
 **Contracts** (`src/validation/contracts.py`, built with Pandera). The pipeline stops before bad data reaches features or training. All thresholds are in `configs/data_config.yaml`.
 
@@ -82,7 +90,14 @@ On failure, one structured JSON alert lists every broken check with example bad 
  "failures": [{"column": "driver_age", "check": "in_range(16, 100)", "failing_rows": 1, "examples": ["15"]}]}
 ```
 
-A report is written to `data/processed/validation_report.json` either way.
+A report is written to `data/processed/validation_report.json` either way. The `validate` pipeline stage re-checks the stored tables and writes this report.
+
+**Halt drill on the real data.** The pipeline was run through `dvc repro` with a deliberately strict config, requiring every driver to be at least 30 (`CLAIM_TRIAGE_DATA_CONFIG` points to an alternate config file). The results:
+- DVC stopped with a non-zero exit status, and the `validate` stage never ran.
+- One alert: `driver_age in_range(30, 100)`, with 4,256 failing claims and examples (24, 28, 22), followed by `pipeline_halted`.
+- `staging.claims` was byte-for-byte unchanged.
+
+The warehouse is a `persist: true` output in `dvc.yaml`. Without it, DVC would delete the last good warehouse before re-running the stage, so a failed run would leave no data at all.
 
 **Tests** (`tests/unit/`) prove each contract rejects its own kind of bad data:
 - an underage driver

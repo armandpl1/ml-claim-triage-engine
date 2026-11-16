@@ -12,7 +12,11 @@ Steps:
     4. Give every claim a deterministic primary key, claim_id =
        CLM-<policy_id>-<n>, numbering a policy's claims by amount.
     5. Add the high-cost target and a synthetic adjuster note per claim.
-    6. Write raw.policies, raw.claim_amounts and staging.claims to DuckDB.
+    6. Land the downloads untouched in raw.policies and raw.claim_amounts.
+    7. Validate the claims against the data contracts, in memory. If any
+       contract fails, log one structured alert, leave staging.* untouched,
+       and exit with status 1.
+    8. Only then write staging.policies and staging.claims.
 
 Usage:
     python -m src.ingestion.fetch_data [--force]
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -32,6 +37,7 @@ from sklearn.datasets import fetch_openml
 from src.common.config import load_config, resolve
 from src.common.logging import get_logger, log_event
 from src.ingestion.notes import generate_note
+from src.validation.contracts import ContractViolation, check_orphans, validate_claims
 
 logger = get_logger("ingestion")
 
@@ -144,31 +150,56 @@ def build_claims(
     return claims, orphans
 
 
-def store(policies: pd.DataFrame, amounts: pd.DataFrame, claims: pd.DataFrame) -> None:
-    """Replace the warehouse tables (idempotent)."""
-    cfg = load_config()
-    path = resolve(cfg["paths"]["warehouse"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with duckdb.connect(str(path)) as con:
-        con.execute("CREATE SCHEMA IF NOT EXISTS raw")
-        con.execute("CREATE SCHEMA IF NOT EXISTS staging")
-        for table, frame in (
-            ("raw.policies", policies),
-            ("raw.claim_amounts", amounts),
-            ("staging.claims", claims),
-        ):
-            con.register("frame", frame)
-            con.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM frame")
-            con.unregister("frame")
+def store_raw(policies: pd.DataFrame, amounts: pd.DataFrame) -> None:
+    """Land the downloads untouched in raw.* (same columns and values as the source)."""
+    _replace_tables({"raw.policies": policies, "raw.claim_amounts": amounts})
+
+
+def store_staging(policies: pd.DataFrame, claims: pd.DataFrame) -> None:
+    """Write the cleaned, validated tables. Only called after contracts pass."""
+    _replace_tables({"staging.policies": policies, "staging.claims": claims})
+    with _connect() as con:
         con.execute("ALTER TABLE staging.claims ADD PRIMARY KEY (claim_id)")
 
 
+def _connect() -> duckdb.DuckDBPyConnection:
+    path = resolve(load_config()["paths"]["warehouse"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(path))
+
+
+def _replace_tables(tables: dict[str, pd.DataFrame]) -> None:
+    """Replace each table in one transaction (idempotent, all or nothing)."""
+    with _connect() as con:
+        con.execute("BEGIN TRANSACTION")
+        for table in tables:
+            con.execute(f"CREATE SCHEMA IF NOT EXISTS {table.split('.')[0]}")
+        for table, frame in tables.items():
+            con.register("frame", frame)
+            con.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM frame")
+            con.unregister("frame")
+        con.execute("COMMIT")
+
+
 def run(force: bool = False) -> IngestStats:
+    """Fetch, land raw, build and validate staging, then write staging.
+
+    Raises ContractViolation, without touching staging.*, if a contract fails.
+    """
     cfg = load_config()
-    policies = clean_policies(download(cfg["source"]["policies_openml_id"], "policies", force))
-    amounts = clean_amounts(download(cfg["source"]["claims_openml_id"], "claim_amounts", force))
+    raw_policies = download(cfg["source"]["policies_openml_id"], "policies", force)
+    raw_amounts = download(cfg["source"]["claims_openml_id"], "claim_amounts", force)
+    store_raw(raw_policies, raw_amounts)
+
+    policies = clean_policies(raw_policies)
+    amounts = clean_amounts(raw_amounts)
     claims, orphans = build_claims(policies, amounts, cfg)
-    store(policies, amounts, claims)
+
+    # Fail fast: validate in memory, before anything reaches staging.
+    check_orphans(len(amounts), len(claims), cfg)
+    validate_claims(claims, cfg)
+    store_staging(policies, claims)
+
     stats = IngestStats(
         policies=len(policies),
         claim_amounts=len(amounts),
@@ -184,7 +215,11 @@ def run(force: bool = False) -> IngestStats:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--force", action="store_true", help="re-download from OpenML")
-    run(force=parser.parse_args().force)
+    try:
+        run(force=parser.parse_args().force)
+    except ContractViolation as exc:
+        log_event(logger, logging.CRITICAL, "pipeline_halted", stage="ingestion", reason=str(exc))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

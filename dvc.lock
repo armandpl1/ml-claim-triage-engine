@@ -9,13 +9,13 @@ stages:
       size: 1638
     - path: src/common
       hash: md5
-      md5: eb5f9164a65aed8ebbca79bf3caf3fbe.dir
-      size: 2250
+      md5: 2bf3d52c7221294d94be0ef323e97905.dir
+      size: 2684
       nfiles: 3
     - path: src/ingestion
       hash: md5
-      md5: 6363a1d5109277611182b431781fde79.dir
-      size: 12474
+      md5: d670752045e81236b5bad64eca95caea.dir
+      size: 13897
       nfiles: 3
     outs:
     - path: data/raw/claim_amounts.parquet
@@ -28,8 +28,8 @@ stages:
       size: 7431950
     - path: data/warehouse.duckdb
       hash: md5
-      md5: 799a3e1b935e6c219df4eb5a37d5581d
-      size: 9711616
+      md5: 810e4470eea34deb60159eeb1e496d8e
+      size: 25178112
   validate:
     cmd: python -m src.validation.contracts
     deps:
@@ -39,12 +39,12 @@ stages:
       size: 1638
     - path: data/warehouse.duckdb
       hash: md5
-      md5: 799a3e1b935e6c219df4eb5a37d5581d
-      size: 9711616
+      md5: 810e4470eea34deb60159eeb1e496d8e
+      size: 25178112
     - path: src/common
       hash: md5
-      md5: eb5f9164a65aed8ebbca79bf3caf3fbe.dir
-      size: 2250
+      md5: 2bf3d52c7221294d94be0ef323e97905.dir
+      size: 2684
       nfiles: 3
     - path: src/validation
       hash: md5

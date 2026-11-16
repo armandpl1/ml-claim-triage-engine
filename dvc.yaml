@@ -14,7 +14,10 @@ stages:
           persist: true
       - data/raw/claim_amounts.parquet:
           persist: true
-      - data/warehouse.duckdb
+      # persist: if a contract fails, the run halts before writing staging.
+      # Without persist, DVC would delete the last good warehouse first.
+      - data/warehouse.duckdb:
+          persist: true
 
   validate:
     cmd: python -m src.validation.contracts
