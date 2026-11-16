@@ -29,3 +29,22 @@ stages:
     metrics:
       - data/processed/validation_report.json:
           cache: false
+
+  features:
+    cmd: python -m src.features.build_features
+    deps:
+      - src/features
+      - src/common
+      - configs/data_config.yaml
+      - data/warehouse.duckdb
+      - data/processed/validation_report.json
+    outs:
+      - data/processed/train.parquet
+      - data/processed/validation.parquet
+      - data/processed/test.parquet
+      - data/reference/reference.parquet
+      - artifacts/preprocessor.joblib
+      - artifacts/tokenizer
+    metrics:
+      - data/processed/feature_report.json:
+          cache: false

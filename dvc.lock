@@ -5,8 +5,8 @@ stages:
     deps:
     - path: configs/data_config.yaml
       hash: md5
-      md5: 96b8271cd1bc1f05a5faa3ec3a012a26
-      size: 1638
+      md5: dfb561e1a902366ecbbeafc1d9a93685
+      size: 2777
     - path: src/common
       hash: md5
       md5: 2bf3d52c7221294d94be0ef323e97905.dir
@@ -28,19 +28,19 @@ stages:
       size: 7431950
     - path: data/warehouse.duckdb
       hash: md5
-      md5: 810e4470eea34deb60159eeb1e496d8e
-      size: 25178112
+      md5: 19e9c6b994db6713f3badf11450b167a
+      size: 25964544
   validate:
     cmd: python -m src.validation.contracts
     deps:
     - path: configs/data_config.yaml
       hash: md5
-      md5: 96b8271cd1bc1f05a5faa3ec3a012a26
-      size: 1638
+      md5: dfb561e1a902366ecbbeafc1d9a93685
+      size: 2777
     - path: data/warehouse.duckdb
       hash: md5
-      md5: 810e4470eea34deb60159eeb1e496d8e
-      size: 25178112
+      md5: 19e9c6b994db6713f3badf11450b167a
+      size: 25964544
     - path: src/common
       hash: md5
       md5: 2bf3d52c7221294d94be0ef323e97905.dir
@@ -56,3 +56,58 @@ stages:
       hash: md5
       md5: 3a031ba1b663bbae39e04fcbe78603af
       size: 211
+  features:
+    cmd: python -m src.features.build_features
+    deps:
+    - path: configs/data_config.yaml
+      hash: md5
+      md5: dfb561e1a902366ecbbeafc1d9a93685
+      size: 2777
+    - path: data/processed/validation_report.json
+      hash: md5
+      md5: 3a031ba1b663bbae39e04fcbe78603af
+      size: 211
+    - path: data/warehouse.duckdb
+      hash: md5
+      md5: 19e9c6b994db6713f3badf11450b167a
+      size: 25964544
+    - path: src/common
+      hash: md5
+      md5: 2bf3d52c7221294d94be0ef323e97905.dir
+      size: 2684
+      nfiles: 3
+    - path: src/features
+      hash: md5
+      md5: b37dc5458a3ee85a206d45f6e3a5c6c0.dir
+      size: 9478
+      nfiles: 5
+    outs:
+    - path: artifacts/preprocessor.joblib
+      hash: md5
+      md5: 39f3689f75d39fe801fb67c37e787be3
+      size: 4322
+    - path: artifacts/tokenizer
+      hash: md5
+      md5: 7a9a59c6d1bebf45109a27b0ffd9d64f.dir
+      size: 711861
+      nfiles: 3
+    - path: data/processed/feature_report.json
+      hash: md5
+      md5: 10e85375ac3721d9f0ed8e0ab8a9a9fe
+      size: 332
+    - path: data/processed/test.parquet
+      hash: md5
+      md5: 40bc1babb13a09c23f42b71e129520e6
+      size: 163809
+    - path: data/processed/train.parquet
+      hash: md5
+      md5: 983f8018788e4f00e602ee04d2608237
+      size: 604811
+    - path: data/processed/validation.parquet
+      hash: md5
+      md5: c55fa991fec703e28fb033f3134a9a85
+      size: 164707
+    - path: data/reference/reference.parquet
+      hash: md5
+      md5: b957fa9213e69ca54ece9cefdb989b72
+      size: 235128

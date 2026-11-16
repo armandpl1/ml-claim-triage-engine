@@ -1,0 +1,20 @@
+{
+  "rows": {
+    "train": 18509,
+    "validation": 3966,
+    "test": 3969
+  },
+  "high_cost_share": {
+    "train": 0.0462,
+    "validation": 0.0461,
+    "test": 0.0464
+  },
+  "policies_in_more_than_one_split": 0,
+  "excluded_columns": [
+    "claim_amount",
+    "claim_count",
+    "claim_seq",
+    "density"
+  ],
+  "passed": true
+}

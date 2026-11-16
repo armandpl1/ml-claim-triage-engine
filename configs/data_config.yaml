@@ -47,3 +47,31 @@ split:
   train: 0.70
   validation: 0.15
   test: 0.15
+
+# Grouped and stratified: all claims of a policy stay in one split (so the
+# model is never graded on a policy it trained on), and every split keeps the
+# same high-cost rate.
+split_group: policy_id
+split_stratify: is_high_cost
+
+features:
+  numeric: [exposure, vehicle_power, vehicle_age, driver_age, bonus_malus, log_density]
+  categorical: [area, vehicle_brand, fuel_type, region]
+  text: adjuster_note
+  target_classification: is_high_cost
+  target_regression: claim_amount
+  target_text: claim_category
+  # Columns that must never be features, and why:
+  excluded:
+    claim_seq: ranks a policy's claims by amount, so it encodes the target
+    claim_count: counts the policy's claims over the whole period, including
+      later ones, so it isn't known when a claim arrives
+    claim_amount: the regression target; is_high_cost is derived from it
+    density: replaced by log_density (heavily skewed, 1 to 27,000)
+
+text:
+  # Pinned to an exact Hugging Face commit, so the tokenizer can't change
+  # under the model.
+  tokenizer: distilbert/distilbert-base-uncased
+  revision: 12040accade4e8a0f71eabdb258fecc2e7e948be
+  max_length: 48

@@ -24,9 +24,35 @@ dev = [
     "ruff>=0.6",
     "types-pyyaml>=6.0",
 ]
+# Training and NLP stack (Steps 3-4). Installed by default with `uv sync`;
+# the serving image (Step 7) installs only what inference needs.
+train = [
+    "joblib>=1.4",
+    "lightgbm>=4.5",
+    "matplotlib>=3.9",
+    "mlflow>=2.17",
+    "onnx>=1.17",
+    "onnxmltools>=1.12",
+    "onnxruntime>=1.20",
+    "optuna>=4.0",
+    "peft>=0.13",
+    "skl2onnx>=1.17",
+    "torch>=2.5",
+    "transformers>=4.46",
+]
 
 [tool.uv]
 package = false
+default-groups = ["dev", "train"]
+
+# CPU-only PyTorch: skips ~2 GB of CUDA libraries a laptop CPU can't use.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.ruff]
 line-length = 100
