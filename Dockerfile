@@ -9,6 +9,10 @@
 # (docker-compose.yml mounts it) or from a bundle folder (make bundle).
 
 FROM python:3.11-slim AS builder
+# git: uv fetches the shared data-ml-toolkit SDK from GitHub (builder stage only)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \

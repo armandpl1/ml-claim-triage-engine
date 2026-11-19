@@ -650,6 +650,23 @@ wheels = [
 ]
 
 [[package]]
+name = "data-ml-toolkit"
+version = "0.1.0"
+source = { git = "https://github.com/armandpl1/data-ml-toolkit?tag=v0.1.0#56921299172a4a71603bbbc641e2f68cce17d15f" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[[package]]
 name = "databricks-sdk"
 version = "0.167.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1682,6 +1699,7 @@ version = "0.1.0"
 source = { virtual = "." }
 default-groups = ["dev", "pipeline", "serve", "train"]
 dependencies = [
+    { name = "data-ml-toolkit" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pyyaml" },
@@ -1689,13 +1707,10 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "data-ml-toolkit", extra = ["dev"] },
     { name = "dvc" },
     { name = "httpx" },
-    { name = "mypy" },
     { name = "pandas-stubs" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "ruff" },
     { name = "types-pyyaml" },
 ]
 pipeline = [
@@ -1732,19 +1747,17 @@ train = [
 
 [package.metadata]
 requires-dist = [
+    { name = "data-ml-toolkit", git = "https://github.com/armandpl1/data-ml-toolkit?tag=v0.1.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "data-ml-toolkit", extras = ["dev"], git = "https://github.com/armandpl1/data-ml-toolkit?tag=v0.1.0" },
     { name = "dvc", specifier = ">=3.50" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "mypy", specifier = ">=1.11" },
     { name = "pandas-stubs", specifier = ">=2.2" },
-    { name = "pre-commit", specifier = ">=3.8" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "ruff", specifier = ">=0.6" },
     { name = "types-pyyaml", specifier = ">=6.0" },
 ]
 pipeline = [
