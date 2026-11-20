@@ -49,10 +49,15 @@ def fixture_model(rows, cfg, monotone):
 
 
 def production_scorer(cfg, monotone):
-    """predict(frame) for the production ONNX model, or None if not comparable."""
+    """predict(frame) for the production ONNX model, or None if not comparable.
+
+    metrics.json is committed but model.onnx is not (it lives in the MLflow
+    registry), so a fresh clone or CI tests the fixture-trained model only.
+    """
     metrics_file = PRODUCTION / "metrics.json"
     if (
         not metrics_file.exists()
+        or not (PRODUCTION / "model.onnx").exists()
         or json.loads(metrics_file.read_text()).get("monotone") != monotone
     ):
         return None

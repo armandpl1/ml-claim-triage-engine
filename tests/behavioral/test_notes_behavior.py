@@ -29,12 +29,18 @@ NLP = ROOT / "artifacts" / "nlp"
 
 @pytest.fixture(scope="module")
 def classifier():
+    # metrics.json is committed, but the ONNX model and tokenizer are not (they
+    # live in the MLflow registry), so check the files this test actually loads.
     metrics_file = NLP / "metrics.json"
     if not metrics_file.exists():
         pytest.skip("note classifier not trained yet (make train-nlp)")
     variant = json.loads(metrics_file.read_text())["chosen_variant"]
-    session = ort.InferenceSession(str(NLP / f"model.{variant}.onnx"))
-    tokenizer = NoteTokenizer(ROOT / "artifacts" / "tokenizer" / "tokenizer.json", 48)
+    model_file = NLP / f"model.{variant}.onnx"
+    tokenizer_file = ROOT / "artifacts" / "tokenizer" / "tokenizer.json"
+    if not (model_file.exists() and tokenizer_file.exists()):
+        pytest.skip("trained note classifier not on disk (make train-nlp or make bundle)")
+    session = ort.InferenceSession(str(model_file))
+    tokenizer = NoteTokenizer(tokenizer_file, 48)
     labels = json.loads((NLP / "labels.json").read_text())
 
     def probabilities(notes: list[str]) -> np.ndarray:
