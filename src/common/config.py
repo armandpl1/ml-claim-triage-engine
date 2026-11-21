@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
+from data_ml_toolkit.config import load_yaml, resolve_path
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "configs"
@@ -32,11 +32,9 @@ def load_config(name: str = "data_config.yaml") -> dict[str, Any]:
     }.get(name)
     if override and os.environ.get(override):
         path = Path(os.environ[override])
-    with path.open() as f:
-        config: dict[str, Any] = yaml.safe_load(f)
-    return config
+    return load_yaml(path)
 
 
-def resolve(path: str) -> Path:
+def resolve(path: str | Path) -> Path:
     """A path from the config, relative to the repository root."""
-    return ROOT / path
+    return resolve_path(ROOT, path)
