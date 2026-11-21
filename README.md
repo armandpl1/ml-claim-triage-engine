@@ -2,16 +2,17 @@
 
 Real-time insurance claim triage: predict a claim's cost and whether it needs a senior adjuster, and classify the adjuster's note into a claim category. Everything runs locally on a laptop CPU with open-source tools.
 
-| Status | Step                                           |
-| ------ | ---------------------------------------------- |
-| Done   | 1. Engineering foundation                      |
-| Done   | 2. Idempotent ingestion and data contracts     |
-| Done   | 3. Leakage-free feature pipelines              |
-| Done   | 4. Experiment tracking, tuning and fine-tuning |
-| Done   | 5. Champion vs challenger model gate           |
-| Done   | 6. Three-tier test suite                       |
-| Done   | 7. FastAPI serving in Docker                   |
-| Done   | 8. Observability, drift monitoring and CI/CD   |
+| Status  | Step                                           |
+| ------- | ---------------------------------------------- |
+| Done    | 1. Engineering foundation                      |
+| Done    | 2. Idempotent ingestion and data contracts     |
+| Done    | 3. Leakage-free feature pipelines              |
+| Done    | 4. Experiment tracking, tuning and fine-tuning |
+| Done    | 5. Champion vs challenger model gate           |
+| Done    | 6. Three-tier test suite                       |
+| Done    | 7. FastAPI serving in Docker                   |
+| Done    | 8. Observability, drift monitoring and CI/CD   |
+| Planned | 9. LLMs vs the fine-tuned notes model          |
 
 ## Quick start
 
@@ -264,6 +265,30 @@ The alert named exactly the four shifted columns. A first version alerted on the
 | `cd-model-gate.yml` | Weekly, or on demand             | Rebuild the data, retrain the triage model (8 trials), run the gate; upload the model, metrics and report   |
 
 Actions are pinned to commit SHAs, the token is read-only, every job has a timeout.
+
+## Step 9 (planned): LLMs vs the fine-tuned notes model
+
+**Question:** should a claim-notes classifier be a fine-tuned small model, a
+TF-IDF baseline, or a large language model with no training at all?
+
+- Classify the same test notes with Claude Haiku 5.5, Sonnet 5.5 and
+  Opus 5.5 (zero-shot and a few examples in the prompt), next to DistilBERT
+  INT8 and TF-IDF
+- Compare **quality** (macro F1 with bootstrap confidence intervals, 3
+  repetitions per LLM to measure run-to-run variation), **latency** (p50, p99)
+  and **cost per 1,000 claims**
+- **Label efficiency:** retrain DistilBERT and TF-IDF on 50, 200, 1,000 and
+  4,000 labeled notes. How many labels does a trained model need before it
+  beats a zero-shot LLM that needed none?
+- Honest limit: TF-IDF already matches DistilBERT here (test macro F1 about
+  0.909) and the ceiling is set by the 3% wrong labels in the synthetic notes,
+  so no model should be expected to win clearly on accuracy. The useful
+  answers are cost, latency and labels needed
+- No API cost in tests or CI: model calls are recorded once and replayed
+- Uses the shared LLM and eval code planned for
+  [data-ml-toolkit](https://github.com/armandpl1/data-ml-toolkit) v0.2.0
+  (model layer with record/replay, bootstrap statistics), built first in
+  [agent-eval-lab](https://github.com/armandpl1/agent-eval-lab)
 
 ## Running the heavy steps on a laptop
 
