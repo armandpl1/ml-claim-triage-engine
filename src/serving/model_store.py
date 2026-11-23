@@ -83,18 +83,37 @@ def single_file_onnx(source: Path, target: Path) -> None:
 
 
 def export_bundle(bundle_dir: Path = BUNDLE_DIR) -> dict[str, Any]:
-    """Copy the @champion models and tokenizer from MLflow into a bundle folder."""
-    if bundle_dir.exists():
-        shutil.rmtree(bundle_dir)
-    staging = bundle_dir / "_download"
+    """Copy the @champion models and tokenizer from MLflow into a bundle folder.
+
+    The new bundle is built next to the old one and swapped in only when
+    complete, so a failed export (registry down, no champion) leaves the
+    working bundle in place. The notes model is optional: without a notes
+    champion the bundle is tabular-only, which the API serves as "degraded".
+    """
+    staging = bundle_dir.with_name(f"{bundle_dir.name}.new")
+    if staging.exists():
+        shutil.rmtree(staging)
+    downloads = staging / "_download"
     meta: dict[str, Any] = {}
     for key, name in (("tabular", TABULAR_MODEL), ("notes", NOTES_MODEL)):
-        info = _download_champion(name, staging / key)
-        single_file_onnx(Path(info["onnx"]), bundle_dir / f"{key}.onnx")
+        try:
+            info = _download_champion(name, downloads / key)
+        except Exception:
+            if key == "tabular":
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+            continue  # no notes champion yet: tabular-only bundle
+        single_file_onnx(Path(info["onnx"]), staging / f"{key}.onnx")
         meta[key] = {"name": name, "version": info["version"], "tags": info["tags"]}
-    shutil.rmtree(staging)
-    shutil.copy(TOKENIZER_DIR / "tokenizer.json", bundle_dir / "tokenizer.json")
-    (bundle_dir / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
+    shutil.rmtree(downloads)
+    shutil.copy(TOKENIZER_DIR / "tokenizer.json", staging / "tokenizer.json")
+    (staging / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
+
+    old = bundle_dir.with_name(f"{bundle_dir.name}.old")
+    if bundle_dir.exists():
+        bundle_dir.rename(old)
+    staging.rename(bundle_dir)
+    shutil.rmtree(old, ignore_errors=True)
     return meta
 
 
