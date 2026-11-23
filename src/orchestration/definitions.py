@@ -12,6 +12,8 @@
 - The gate rejecting a challenger is a normal outcome, not a failure: the
   asset records the decision, and serving_bundle only re-exports when the
   champion changed.
+- nightly_batch (src/orchestration/batch.py) scores each night's claims,
+  loads settled outcomes and checks performance, one partition per night.
 - retrain_tabular runs the whole path. The notes model has its own job,
   retrain_notes, because fine-tuning takes about an hour on a CPU.
 
@@ -28,6 +30,12 @@ import sys
 import dagster as dg
 
 from src.common.config import ROOT
+from src.orchestration.batch import (
+    BATCH_ASSETS,
+    BatchSettings,
+    nightly_batch,
+    nightly_batch_schedule,
+)
 
 PYTHON = sys.executable
 
@@ -157,7 +165,9 @@ defs = dg.Definitions(
         tabular_gate,
         notes_gate,
         serving_bundle,
+        *BATCH_ASSETS,
     ],
-    jobs=[retrain_tabular, retrain_notes],
-    resources={"commands": Commands()},
+    jobs=[retrain_tabular, retrain_notes, nightly_batch],
+    schedules=[nightly_batch_schedule],
+    resources={"commands": Commands(), "batch": BatchSettings()},
 )

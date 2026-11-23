@@ -158,6 +158,11 @@ def judge_cohorts(
     return results
 
 
+def read_report(as_of: date) -> dict[str, Any]:
+    """The report written by run() for that date."""
+    return json.loads((REPORT_DIR / f"performance_{as_of.isoformat()}.json").read_text())
+
+
 def run(as_of: date, model: TabularModel | None = None, cfg: dict[str, Any] | None = None) -> int:
     cfg = cfg or load_config("batch_config.yaml")
     model = model or load_champion()

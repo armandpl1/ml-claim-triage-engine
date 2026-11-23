@@ -1,0 +1,9 @@
+# Dagster instance settings, copied to DAGSTER_HOME (.dagster/) by
+# `make orchestrate`. Nightly batch runs rebuild "outcomes known by this
+# night", so they must run one at a time and in order.
+run_queue:
+  tag_concurrency_limits:
+    - key: claim-triage/batch
+      limit: 1
+telemetry:
+  enabled: false
