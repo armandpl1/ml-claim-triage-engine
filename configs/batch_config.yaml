@@ -1,0 +1,27 @@
+# Batch scoring and delayed-label monitoring (src/batch/). Kept apart from
+# data_config.yaml, which the DVC pipeline depends on: changing these
+# settings doesn't re-run the data stages.
+
+batch:
+  # Nightly batch scoring and delayed-label performance monitoring
+  # (src/batch/). The held-out test claims stand in for new claims: the
+  # model never saw them, and their real costs act as outcomes that arrive
+  # weeks after each claim is scored.
+  store: data/batch/batch.duckdb
+  source: data/processed/test.parquet
+  start_date: 2025-01-06   # a Monday; claims are reported over the next `days` days
+  days: 56
+  # A claim's final cost is known only once it settles. Expensive claims
+  # take longer, so early labels are biased toward cheap claims.
+  label_delay_days: {min: 14, max: 60}
+  high_cost_extra_delay_days: 45
+  monitor:
+    cohort_days: 14            # claims grouped by report date, two weeks per cohort
+    min_label_coverage: 0.95   # judge a cohort only once this share of it has labels
+    min_positives: 20          # and it holds at least this many high-cost claims
+    confidence: 0.95           # Wilson interval for precision and recall
+  # Scenario for the demo: claim costs rise from a date on, while the
+  # features stay the same. Concept drift that feature drift can't show.
+  inflation:
+    start_day: 28
+    rate: 0.30
