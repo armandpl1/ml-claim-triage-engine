@@ -9,8 +9,8 @@ stages:
       size: 3617
     - path: src/common
       hash: md5
-      md5: 55f5fe41c01f6d9af0d5d7d93d7e3797.dir
-      size: 2952
+      md5: a6434184a9dbca933e5695b4b0949606.dir
+      size: 1698
       nfiles: 3
     - path: src/ingestion
       hash: md5
@@ -28,8 +28,8 @@ stages:
       size: 7431950
     - path: data/warehouse.duckdb
       hash: md5
-      md5: a5dd51afbd064a711d3818b9c2b0ed93
-      size: 25702400
+      md5: a2d822d6b831455b3c65a9ea727153a3
+      size: 26226688
   validate:
     cmd: python -m src.validation.contracts
     deps:
@@ -39,12 +39,12 @@ stages:
       size: 3617
     - path: data/warehouse.duckdb
       hash: md5
-      md5: a5dd51afbd064a711d3818b9c2b0ed93
-      size: 25702400
+      md5: a2d822d6b831455b3c65a9ea727153a3
+      size: 26226688
     - path: src/common
       hash: md5
-      md5: 55f5fe41c01f6d9af0d5d7d93d7e3797.dir
-      size: 2952
+      md5: a6434184a9dbca933e5695b4b0949606.dir
+      size: 1698
       nfiles: 3
     - path: src/validation
       hash: md5
@@ -69,12 +69,12 @@ stages:
       size: 211
     - path: data/warehouse.duckdb
       hash: md5
-      md5: a5dd51afbd064a711d3818b9c2b0ed93
-      size: 25702400
+      md5: a2d822d6b831455b3c65a9ea727153a3
+      size: 26226688
     - path: src/common
       hash: md5
-      md5: 55f5fe41c01f6d9af0d5d7d93d7e3797.dir
-      size: 2952
+      md5: a6434184a9dbca933e5695b4b0949606.dir
+      size: 1698
       nfiles: 3
     - path: src/features
       hash: md5
