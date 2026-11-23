@@ -14,6 +14,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 | Done    | 8. Observability, drift monitoring and CI/CD   |
 | Planned | 9. LLMs vs the fine-tuned notes model          |
 | Done    | Production storage: S3 (Terraform) + Postgres  |
+| Done    | Batch scoring and delayed-label monitoring     |
 
 ## Quick start
 
@@ -334,6 +335,45 @@ Limits, stated honestly:
 - **Postgres credentials are local only** (`mlflow`/`mlflow` in the compose file). A real deployment reads them from a secret store.
 - **The serving stack (`make up`) still uses the local SQLite store.** Moving the API to the server is part of the Kubernetes step.
 
+## Batch scoring and delayed-label monitoring
+
+Drift checks (Step 8) compare inputs. They can't tell whether the model is still *right*: that needs the real outcome, and a claim's final cost is known only when it settles, weeks or months later. This adds the nightly batch path and monitors real quality as outcomes arrive.
+
+The held-out test claims stand in for new claims. `configs/batch_config.yaml` spreads them over 56 days of reports (about 71 a day). Each one settles 14-60 days later, plus 45 more if it is expensive, as in real claims handling: high-cost claims settle in a median of 81 days, the rest in 37.
+
+| Job                        | What it does                                                                                   |
+| -------------------------- | ---------------------------------------------------------------------------------------------- |
+| `src/batch/score.py`       | Scores one day's claims with `@champion` (registry or bundle); idempotent per day              |
+| `src/batch/labels.py`      | Loads every outcome known by a date; optional `inflation` scenario                             |
+| `src/batch/performance.py` | Joins predictions to outcomes in two-week cohorts and alerts on calibration, recall, precision |
+| `src/batch/backfill.py`    | Replays every night from an empty store; records when the first alert fired                    |
+| `data/batch/batch.duckdb`  | `predictions`, `outcomes` and an audit table of job runs (git-ignored)                         |
+
+```bash
+make batch-score DATE=2025-01-06        # one night's scoring
+make batch-backfill                     # the whole period, normal claims (~1.5 min)
+make batch-backfill SCENARIO=inflation  # claim costs rise 30% from day 28
+```
+
+How a cohort is judged:
+- **Only once settled.** A cohort is judged 105 days after its last report date (the slowest settlement), and only if it holds 20+ high-cost claims. A first version judged cohorts at 95% label coverage and raised false alarms: the missing 5% were the expensive claims, so cohorts looked half as costly as they were.
+- **Calibration:** is the realized high-cost rate within the 99% Wilson interval of what the model expected (its mean probability)?
+- **Recall and precision:** alert only if the whole 99% interval is below the baseline.
+- **Baseline:** the champion on the validation split (precision 0.114, recall 0.191, PR-AUC 0.090). The test split is the monitored stream, so it can't be the baseline.
+- **99%, not 95%:** each weekly check runs up to 12 tests. At 95%, normal data raised a false alarm (a cohort with 60 high-cost claims where the model expected 44, about a 1-in-80 fluke).
+
+Results (champion v1, `reports/batch/backfill_*.json`):
+
+| Scenario  | Weekly checks | Alerts | First alert | Detail                                                                 |
+| --------- | ------------- | ------ | ----------- | ---------------------------------------------------------------------- |
+| Normal    | 24            | 0      | none        | Realized high-cost rate within the interval for all 4 cohorts          |
+| Inflation | 24            | 1      | 2025-06-15  | Last cohort: high-cost rate 7.2% vs 4.6% expected; 184 → 229 high-cost |
+
+Honest findings:
+- **Inflation is invisible to drift checks.** The features don't change, only the costs, so only outcomes can reveal it. 45 more claims crossed the 5,000 EUR threshold.
+- **Detection took 132 days** (inflation from 2025-02-03, alert on 2025-06-15). Waiting for labels to settle is slow. The first inflated cohort (6.1% vs 4.5%) missed the 99% interval narrowly. Faster options: judge early outcomes against how early outcomes usually look at the same age, or pool cohorts after a suspected change.
+- **Recall fell a little but didn't alert.** In the two inflated cohorts recall went from 0.143 and 0.149 to 0.129 and 0.125. With 40-70 high-cost claims per cohort, a recall interval spans about 0.05-0.28, so only a large drop is provable.
+
 ## Running the heavy steps on a laptop
 
 Fine-tuning and Optuna can use several GB of RAM. Running two at once got processes killed by the Linux out-of-memory daemon, including the desktop session. Run one heavy job at a time, ideally in a memory-capped scope:
@@ -349,6 +389,7 @@ The notes ONNX evaluation runs in batches, so its memory stays flat.
 ```
 configs/data_config.yaml     sources, paths, contracts, features, tokenizer, monitoring
 configs/train_config.yaml    tuning, fine-tuning, export, latency budget, gate rules
+configs/batch_config.yaml    batch schedule, settlement delays, monitoring rules, scenario
 src/common/                  config loading, structured JSON logging
 src/ingestion/               fetch_data.py (download, clean, join, store), notes.py
 src/validation/              contracts.py (Pandera contracts, fail-fast alerts)
@@ -356,6 +397,7 @@ src/features/                split, preprocessing, tokenizer, shared row feature
 src/training/                tabular.py, nlp.py, onnx_export.py, benchmark.py, text_baseline.py
 src/evaluation/              scoring.py (scorecards), gate.py (champion vs challenger)
 src/serving/                 FastAPI app, schemas, model loading, tokenizer
+src/batch/                   nightly scoring, outcomes, delayed-label performance, backfill
 src/infra/                   storage_check.py (S3 and IAM), mlflow_check.py (server smoke test)
 infra/terraform/             S3 buckets, KMS key, IAM roles (applied to Moto locally)
 infra/docker-compose.yml     Moto, Postgres and the MLflow server (infra/mlflow)
