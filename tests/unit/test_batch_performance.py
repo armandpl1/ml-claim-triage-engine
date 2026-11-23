@@ -16,12 +16,13 @@ CFG = {
         "start_date": "2025-01-06",
         "monitor": {
             "cohort_days": 14,
-            "min_label_coverage": 0.95,
+            "maturity_days": 105,
             "min_positives": 20,
-            "confidence": 0.95,
+            "confidence": 0.99,
         },
     }
 }
+SETTLED = date(2025, 6, 30)  # after 2025-01-19 + 105 days
 BASE = {"precision": 0.12, "recall": 0.25, "pr_auc": 0.09, "positive_rate": 0.05}
 
 
@@ -65,31 +66,52 @@ def test_wilson_matches_known_values():
 
 
 def test_a_healthy_cohort_raises_no_alert():
-    [result] = judge_cohorts(cohort(), BASE, CFG)
+    [result] = judge_cohorts(cohort(), BASE, CFG, SETTLED)
     assert result["mature"] and result["alerts"] == []
     assert result["label_coverage"] == 1.0 and result["positives"] == 50
 
 
 def test_immature_cohorts_are_reported_but_not_judged():
-    # Only 60% labeled: looks terrible (no positives yet) but must not alert
-    early = cohort(labeled_share=0.6, positive_rate=0.05)
+    # 97% labeled but the expensive claims are the missing 3%: the cohort
+    # looks far cheaper than the model expects, and must not alert yet
+    early = cohort(labeled_share=0.97, positive_rate=0.05)
     early.loc[early["is_high_cost"].notna(), "is_high_cost"] = False
-    [result] = judge_cohorts(early, BASE, CFG)
+    early.loc[:20, "is_high_cost"] = True
+    [result] = judge_cohorts(early, BASE, CFG, date(2025, 3, 31))
     assert not result["mature"] and result["alerts"] == []
-    assert result["labeled"] == 600
+    assert result["labeled"] == 970 and result["settled_by"] == "2025-05-04"
+    # Once the settlement window has passed, the same cohort is judged
+    [late] = judge_cohorts(early, BASE, CFG, SETTLED)
+    assert late["mature"] and late["alerts"]
 
 
 def test_more_expensive_claims_than_expected_breaks_calibration():
-    [result] = judge_cohorts(cohort(positive_rate=0.09, probability=0.05), BASE, CFG)
+    [result] = judge_cohorts(cohort(positive_rate=0.09, probability=0.05), BASE, CFG, SETTLED)
     assert any(a.startswith("calibration") for a in result["alerts"])
 
 
 def test_a_clear_recall_drop_alerts():
-    [result] = judge_cohorts(cohort(positive_rate=0.08, probability=0.08, recall=0.05), BASE, CFG)
+    [result] = judge_cohorts(
+        cohort(positive_rate=0.08, probability=0.08, recall=0.05), BASE, CFG, SETTLED
+    )
     assert any(a.startswith("recall") for a in result["alerts"])
     assert not any(a.startswith("calibration") for a in result["alerts"])
 
 
 def test_a_small_drop_within_noise_does_not_alert():
-    [result] = judge_cohorts(cohort(recall=0.2), BASE, CFG)  # 10 of 50 caught vs 0.25
+    [result] = judge_cohorts(cohort(recall=0.2), BASE, CFG, SETTLED)  # 10 of 50 caught vs 0.25
     assert result["alerts"] == []
+
+
+def test_backfill_runs_until_every_outcome_is_known():
+    from src.batch.backfill import nights
+
+    cfg = {
+        "batch": {
+            "start_date": "2025-01-06",
+            "days": 56,
+            "label_delay_days": {"min": 14, "max": 60},
+            "high_cost_extra_delay_days": 45,
+        }
+    }
+    assert nights(cfg) == (date(2025, 1, 6), date(2025, 3, 2), date(2025, 6, 15))

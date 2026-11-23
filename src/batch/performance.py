@@ -2,10 +2,11 @@
 now that the claims' real costs are known?
 
 Joins predictions to outcomes and groups claims into cohorts by report date
-(`monitor.cohort_days`). A cohort is judged only once it is mature: at least
-`min_label_coverage` of it has outcomes and it holds `min_positives`
-high-cost claims. Expensive claims settle last, so an immature cohort's
-labels are biased toward cheap claims and would make recall look wrong.
+(`monitor.cohort_days`). A cohort is judged only once it is mature: `maturity_days` have passed
+since its last report date, so even its slowest claim has settled, and it
+holds `min_positives` high-cost claims. Expensive claims settle last, so an
+immature cohort's labels are biased toward cheap claims. A coverage rule
+("95% labeled") isn't enough: the last 5% are the expensive claims.
 
 For each mature cohort, three checks:
     calibration  the realized high-cost rate vs the rate the model expected
@@ -88,7 +89,7 @@ def baseline(model: TabularModel) -> dict[str, float]:
 
 
 def judge_cohorts(
-    joined: pd.DataFrame, base: dict[str, float], cfg: dict[str, Any]
+    joined: pd.DataFrame, base: dict[str, float], cfg: dict[str, Any], as_of: date
 ) -> list[dict[str, Any]]:
     """One result per cohort. joined: report_date, probability, threshold,
     route, is_high_cost (NaN when the outcome isn't known yet)."""
@@ -103,15 +104,15 @@ def judge_cohorts(
         flagged = labeled["route"].eq("senior_adjuster").to_numpy()
         counts = classification_counts(labels, flagged)
         coverage = len(labeled) / len(cohort)
-        mature = coverage >= float(mon["min_label_coverage"]) and counts["positives"] >= int(
-            mon["min_positives"]
-        )
         first = start + timedelta(days=int(number) * size)
+        settled_by = first + timedelta(days=size - 1 + int(mon["maturity_days"]))
+        mature = as_of >= settled_by and counts["positives"] >= int(mon["min_positives"])
         result: dict[str, Any] = {
             "cohort": f"{first.isoformat()}..{(first + timedelta(days=size - 1)).isoformat()}",
             "scored": len(cohort),
             "labeled": len(labeled),
             "label_coverage": round(coverage, 4),
+            "settled_by": settled_by.isoformat(),
             **counts,
             "mature": mature,
             "alerts": [],
@@ -176,7 +177,7 @@ def run(as_of: date, model: TabularModel | None = None, cfg: dict[str, Any] | No
     # Outcomes after the as-of date aren't known yet; keep their predictions
     joined["is_high_cost"] = joined["is_high_cost"].astype("object")
     base = baseline(model)
-    cohorts = judge_cohorts(joined, base, cfg)
+    cohorts = judge_cohorts(joined, base, cfg, as_of)
     alerts = [f"{c['cohort']} {a}" for c in cohorts for a in c["alerts"]]
     report = {
         "as_of": as_of.isoformat(),

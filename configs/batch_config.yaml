@@ -16,10 +16,16 @@ batch:
   label_delay_days: {min: 14, max: 60}
   high_cost_extra_delay_days: 45
   monitor:
-    cohort_days: 14            # claims grouped by report date, two weeks per cohort
-    min_label_coverage: 0.95   # judge a cohort only once this share of it has labels
-    min_positives: 20          # and it holds at least this many high-cost claims
-    confidence: 0.95           # Wilson interval for precision and recall
+    cohort_days: 14      # claims grouped by report date, two weeks per cohort
+    # Judge a cohort only once its slowest claim could have settled
+    # (label_delay_days.max + high_cost_extra_delay_days). A label-coverage
+    # rule like "95% labeled" isn't enough: the missing 5% are exactly the
+    # expensive claims, and the cohort looks far cheaper than it is.
+    maturity_days: 105
+    min_positives: 20    # and only if it holds this many high-cost claims
+    # Each weekly check runs 3 tests on every mature cohort (12 with four
+    # cohorts). At 95% one false alarm fired on normal data, so 99%.
+    confidence: 0.99
   # Scenario for the demo: claim costs rise from a date on, while the
   # features stay the same. Concept drift that feature drift can't show.
   inflation:
