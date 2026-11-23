@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data infra-up infra-plan infra-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -79,6 +79,25 @@ push-data:  ## Store data versions in the DVC remote
 
 pull-data:  ## Restore data versions from the DVC remote
 	$(RUN) dvc pull
+
+TF := terraform -chdir=infra/terraform
+INFRA := docker compose -f infra/docker-compose.yml
+
+infra-up:  ## Start the AWS emulator (Moto) and apply infra/terraform; a second plan must show no changes
+	$(INFRA) up -d --wait moto
+	$(TF) init -input=false
+	$(TF) apply -auto-approve -input=false
+	# Moto ignores tags sent with CreateBucket; a second apply sets them the normal way
+	$(TF) apply -auto-approve -input=false
+	$(TF) plan -detailed-exitcode -input=false
+
+infra-plan:  ## Show what Terraform would change (exit 2 means drift)
+	$(TF) plan -detailed-exitcode -input=false
+
+infra-down:  ## Stop the emulator and MLflow storage (their data is wiped); forget the local Terraform state
+	# Not `terraform destroy`: it rightly refuses to delete buckets that hold data
+	$(INFRA) down -v
+	rm -f infra/terraform/terraform.tfstate infra/terraform/terraform.tfstate.backup
 
 clean:  ## Remove caches and CI outputs
 	rm -rf reports .pytest_cache .mypy_cache .ruff_cache

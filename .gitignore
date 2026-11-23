@@ -24,3 +24,7 @@ reports/
 # results next to them (metrics, gate decisions, benchmark) are committed.
 *.onnx
 *.onnx.data
+
+# Terraform: providers and local state for the emulator
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate*

@@ -1,0 +1,25 @@
+# Local AWS and MLflow storage for claim-triage. No account or credentials.
+#
+#   make infra-up    start Moto (an open-source AWS emulator) and apply
+#                    infra/terraform: S3 buckets, KMS key, IAM roles
+#   make mlflow-up   also start Postgres and an MLflow server that stores
+#                    runs in Postgres and artifacts in the S3 bucket
+#   make infra-down  stop everything (the emulator's data is wiped)
+#
+# Ports are offset from the defaults so this can run next to the serving
+# stack (docker-compose.yml) and the ecom project's emulator.
+name: claim-triage-infra
+
+services:
+  moto:
+    image: motoserver/moto:5.2.5
+    ports:
+      - "15100:5000"
+    environment:
+      MOTO_PORT: "5000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/moto-api/')"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    mem_limit: 512m
