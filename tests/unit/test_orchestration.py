@@ -10,9 +10,10 @@ import dagster as dg
 import pytest
 
 from src.orchestration import definitions as d
+from src.orchestration import resources
 
 
-class FakeCommands(d.Commands):
+class FakeCommands(resources.Commands):
     """Records each command instead of running it; exit codes by module."""
 
     calls: ClassVar[list[list[str]]] = []
@@ -73,7 +74,7 @@ def test_only_heavy_steps_get_the_memory_cap(monkeypatch):
     monkeypatch.setattr(
         subprocess, "run", lambda cmd, **_: seen.append(cmd) or subprocess.CompletedProcess(cmd, 0)
     )
-    commands = d.Commands(memory_cap="2500M")
+    commands = resources.Commands(memory_cap="2500M")
     commands.run(["python", "-m", "src.training.tabular"], heavy=True)
     commands.run(["python", "-m", "dvc", "repro"])
     assert seen[0][:3] == ["systemd-run", "--user", "--scope"] and "MemoryMax=2500M" in seen[0]

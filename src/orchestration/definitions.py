@@ -14,6 +14,8 @@
   champion changed.
 - nightly_batch (src/orchestration/batch.py) scores each night's claims,
   loads settled outcomes and checks performance, one partition per night.
+- feature_drift and the retrain_on_alert sensor (src/orchestration/
+  sensors.py) turn a drift or performance alert into a retrain_tabular run.
 - retrain_tabular runs the whole path. The notes model has its own job,
   retrain_notes, because fine-tuning takes about an hour on a CPU.
 
@@ -22,46 +24,16 @@ Run locally:  make orchestrate   (Dagster UI at http://localhost:3001)
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
-
 import dagster as dg
 
-from src.common.config import ROOT
 from src.orchestration.batch import (
     BATCH_ASSETS,
     BatchSettings,
     nightly_batch,
     nightly_batch_schedule,
 )
-
-PYTHON = sys.executable
-
-
-class Commands(dg.ConfigurableResource):
-    """Runs the project's commands from the repository root."""
-
-    memory_cap: str = os.environ.get("CLAIM_TRIAGE_MEMORY_CAP", "")
-
-    def run(self, args: list[str], heavy: bool = False, ok_codes: tuple[int, ...] = (0,)) -> int:
-        command = list(args)
-        if heavy and self.memory_cap:
-            command = [
-                "systemd-run", "--user", "--scope", "--quiet",
-                "-p", f"MemoryMax={self.memory_cap}", "-p", "MemorySwapMax=0",
-                "nice", "-n", "19", *command,
-            ]  # fmt: skip
-        code = subprocess.run(command, cwd=ROOT, check=False).returncode
-        if code not in ok_codes:
-            raise dg.Failure(f"{' '.join(args)} exited with {code}")
-        return code
-
-
-def read_json(relative: str) -> dict:
-    path = ROOT / relative
-    return json.loads(path.read_text()) if path.exists() else {}
+from src.orchestration.resources import PYTHON, Commands, read_json
+from src.orchestration.sensors import MONITORING_ASSETS, SENSORS
 
 
 @dg.asset(
@@ -166,8 +138,10 @@ defs = dg.Definitions(
         notes_gate,
         serving_bundle,
         *BATCH_ASSETS,
+        *MONITORING_ASSETS,
     ],
     jobs=[retrain_tabular, retrain_notes, nightly_batch],
     schedules=[nightly_batch_schedule],
+    sensors=SENSORS,
     resources={"commands": Commands(), "batch": BatchSettings()},
 )

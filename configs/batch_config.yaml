@@ -31,3 +31,10 @@ batch:
   inflation:
     start_day: 28
     rate: 0.30
+
+retrain:
+  # The retrain sensor (src/orchestration/sensors.py) requests retrain_tabular
+  # when model_performance or feature_drift reports a problem, at most once
+  # per cooldown: a degraded model alerts every night until it's fixed, and
+  # one retrain (judged by the gate) is the useful response.
+  cooldown_hours: 168
