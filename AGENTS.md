@@ -85,21 +85,23 @@ on every change.
 
 ## Harnesses
 
-| Tool                                        | Use it to                                                         |
-| ------------------------------------------- | ----------------------------------------------------------------- |
-| `make help`                                 | List every command                                                |
-| `make ci`                                   | Run everything CI runs, locally                                   |
-| `make data`                                 | Run the data pipeline (only changed stages re-run)                |
-| `dvc status`                                | See which pipeline stages are out of date                         |
-| `data/processed/validation_report.json`     | Latest contract results                                           |
-| `uv run python -m src.validation.contracts` | Re-check contracts on the warehouse                               |
-| `make mlflow-ui`                            | Browse experiments, runs and registered model versions            |
-| `make gate`                                 | Champion vs challenger decision; reports in `artifacts/gate/`     |
-| `make text-baseline`                        | The TF-IDF baseline the notes model must beat                     |
-| `make serve`                                | Run the API locally from the MLflow registry                      |
-| `make simulate`, `make drift`               | Send test traffic (`SHIFT=1` to drift it), then check drift       |
-| `make batch-score DATE=...`                 | Score one day's claims in the nightly batch job                   |
-| `make batch-backfill SCENARIO=...`          | Replay every night; delayed-label performance in `reports/batch/` |
-| `make infra-up`, `make infra-check`         | Start the AWS emulator, apply Terraform, check buckets and roles  |
-| `make mlflow-up`, `make mlflow-check`       | MLflow on Postgres + S3 at localhost:5001, then smoke-test it     |
-| `make infra-down`                           | Stop the emulator and MLflow storage (their data is wiped)        |
+| Tool                                        | Use it to                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `make help`                                 | List every command                                                 |
+| `make ci`                                   | Run everything CI runs, locally                                    |
+| `make data`                                 | Run the data pipeline (only changed stages re-run)                 |
+| `dvc status`                                | See which pipeline stages are out of date                          |
+| `data/processed/validation_report.json`     | Latest contract results                                            |
+| `uv run python -m src.validation.contracts` | Re-check contracts on the warehouse                                |
+| `make mlflow-ui`                            | Browse experiments, runs and registered model versions             |
+| `make gate`                                 | Champion vs challenger decision; reports in `artifacts/gate/`      |
+| `make text-baseline`                        | The TF-IDF baseline the notes model must beat                      |
+| `make serve`                                | Run the API locally from the MLflow registry                       |
+| `make simulate`, `make drift`               | Send test traffic (`SHIFT=1` to drift it), then check drift        |
+| `make batch-score DATE=...`                 | Score one day's claims in the nightly batch job                    |
+| `make batch-backfill SCENARIO=...`          | Replay every night; delayed-label performance in `reports/batch/`  |
+| `make orchestrate`                          | Dagster UI at localhost:3001: assets, jobs, schedule, sensors      |
+| `make retrain`, `make nightly DATE=...`     | Retrain (data, train, gate, bundle) or one batch night via Dagster |
+| `make infra-up`, `make infra-check`         | Start the AWS emulator, apply Terraform, check buckets and roles   |
+| `make mlflow-up`, `make mlflow-check`       | MLflow on Postgres + S3 at localhost:5001, then smoke-test it      |
+| `make infra-down`                           | Stop the emulator and MLflow storage (their data is wiped)         |
