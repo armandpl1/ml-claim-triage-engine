@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data batch-score batch-backfill infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -79,6 +79,12 @@ push-data:  ## Store data versions in the DVC remote
 
 pull-data:  ## Restore data versions from the DVC remote
 	$(RUN) dvc pull
+
+batch-score:  ## Score the claims reported on one day: make batch-score DATE=2025-01-06
+	$(RUN) python -m src.batch.score --date $(DATE)
+
+batch-backfill:  ## Replay every night: score, outcomes, weekly performance (SCENARIO=inflation)
+	$(RUN) python -m src.batch.backfill --scenario $(or $(SCENARIO),none)
 
 TF := terraform -chdir=infra/terraform
 INFRA := docker compose -f infra/docker-compose.yml

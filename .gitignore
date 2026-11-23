@@ -28,3 +28,6 @@ reports/
 # Terraform: providers and local state for the emulator
 infra/terraform/.terraform/
 infra/terraform/terraform.tfstate*
+
+# Batch scoring store (predictions, outcomes), rebuilt by make batch-backfill
+data/batch/
