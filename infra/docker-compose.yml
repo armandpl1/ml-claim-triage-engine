@@ -3,7 +3,8 @@
 #   make infra-up    start Moto (an open-source AWS emulator) and apply
 #                    infra/terraform: S3 buckets, KMS key, IAM roles
 #   make mlflow-up   also start Postgres and an MLflow server that stores
-#                    runs in Postgres and artifacts in the S3 bucket
+#                    runs in Postgres and artifacts in the S3 bucket:
+#                    http://localhost:5001
 #   make infra-down  stop everything (the emulator's data is wiped)
 #
 # Ports are offset from the defaults so this can run next to the serving
@@ -23,3 +24,60 @@ services:
       timeout: 2s
       retries: 30
     mem_limit: 512m
+
+  # MLflow's backend store: experiments, runs, metrics, the model registry
+  postgres:
+    image: postgres:16.6-alpine
+    profiles: ["mlflow"]
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow  # local only; a real deployment reads a secret
+      POSTGRES_DB: mlflow
+    ports:
+      - "15432:5432"
+    volumes:
+      - mlflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mlflow", "-d", "mlflow"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    mem_limit: 256m
+
+  # Tracking server. Clients send artifacts through it (--serve-artifacts),
+  # so only the server holds S3 credentials; training and the API need just
+  # the tracking URL.
+  mlflow:
+    build: mlflow
+    image: claim-triage-mlflow:3.18.0
+    profiles: ["mlflow"]
+    command: >
+      mlflow server
+      --backend-store-uri postgresql+psycopg2://mlflow:mlflow@postgres:5432/mlflow
+      --artifacts-destination s3://claim-triage-dev-mlflow
+      --serve-artifacts
+      --host 0.0.0.0 --port 5000 --workers 1
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://moto:5000
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ca-central-1
+      # Background jobs serve MLflow's GenAI features, unused here; they start
+      # extra worker processes that pushed the server past its memory limit
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"
+    ports:
+      - "5001:5000"
+    depends_on:
+      moto:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    mem_limit: 768m
+
+volumes:
+  mlflow-db:
