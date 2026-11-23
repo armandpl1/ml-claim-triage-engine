@@ -1,6 +1,6 @@
 # Data pipeline. `dvc repro` re-runs only the stages whose inputs changed;
-# `dvc push` stores the outputs in the remote (a local folder standing in
-# for cloud object storage such as S3).
+# `dvc push` stores the outputs in the remote, the S3 bucket from
+# infra/terraform (on the Moto emulator locally).
 stages:
   fetch:
     cmd: python -m src.ingestion.fetch_data

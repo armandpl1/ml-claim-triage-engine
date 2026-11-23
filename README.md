@@ -57,14 +57,14 @@ The two are joined into one row per claim in `staging.claims` (26,444 claims). E
 | `pyproject.toml`, uv       | Pinned dependencies (`uv.lock`), Python 3.11 (`.python-version`)                             |
 | Pre-commit hooks           | ruff lint, ruff format and mypy run before every commit and in CI                            |
 | DVC                        | Versions the data. `dvc.yaml` declares the pipeline; `dvc repro` re-runs only changed stages |
-| DVC remote                 | `/tmp/dvc-storage`, a local folder standing in for cloud storage such as S3                  |
+| DVC remote                 | S3 bucket `claim-triage-dev-dvc` (KMS-encrypted, versioned), on the Moto emulator by default |
 | `.github/workflows/ci.yml` | Lint and type check, then all tests, on every pull request                                   |
 
 How Step 1 was verified:
 - **Hooks block bad commits.** A badly formatted file was rejected by ruff, and a function returning text where it declares `int` was rejected by mypy. Neither reached the history.
 - **Data round trip.** A fresh clone rebuilt the environment from `uv.lock`, pulled the data from the DVC remote byte-identical to the original, and passed every test.
 
-`/tmp` is cleared on reboot, so the local DVC remote is temporary by design. Re-run `make data && make push-data` to repopulate it, or point the remote elsewhere with `dvc remote modify localstore url <path>`.
+The DVC remote lives on the AWS emulator (see Storage on S3 below), and the emulator's data is wiped when it stops. Run `make infra-up`, then `make push-data` to repopulate it. `.dvc/config` holds only the bucket and region, as for a real AWS account; `make infra-up` writes the emulator endpoint and its fake credentials to `.dvc/config.local`, which is not committed.
 
 ## Step 2: Idempotent ingestion and data contracts
 

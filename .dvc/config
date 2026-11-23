@@ -1,5 +1,6 @@
 [core]
-    remote = localstore
+    remote = s3
     autostage = true
-['remote "localstore"']
-    url = /tmp/dvc-storage
+['remote "s3"']
+    url = s3://claim-triage-dev-dvc
+    region = ca-central-1

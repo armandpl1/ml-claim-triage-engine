@@ -90,6 +90,11 @@ infra-up:  ## Start the AWS emulator (Moto) and apply infra/terraform; a second 
 	# Moto ignores tags sent with CreateBucket; a second apply sets them the normal way
 	$(TF) apply -auto-approve -input=false
 	$(TF) plan -detailed-exitcode -input=false
+	# Point the DVC remote at the emulator, in .dvc/config.local (not committed):
+	# the committed config stays what a real AWS account would use
+	$(RUN) dvc remote modify --local s3 endpointurl http://localhost:15100
+	$(RUN) dvc remote modify --local s3 access_key_id test
+	$(RUN) dvc remote modify --local s3 secret_access_key test
 
 infra-plan:  ## Show what Terraform would change (exit 2 means drift)
 	$(TF) plan -detailed-exitcode -input=false
