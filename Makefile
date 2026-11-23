@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -79,6 +79,40 @@ push-data:  ## Store data versions in the DVC remote
 
 pull-data:  ## Restore data versions from the DVC remote
 	$(RUN) dvc pull
+
+TF := terraform -chdir=infra/terraform
+INFRA := docker compose -f infra/docker-compose.yml
+
+infra-up:  ## Start the AWS emulator (Moto) and apply infra/terraform; a second plan must show no changes
+	$(INFRA) up -d --wait moto
+	$(TF) init -input=false
+	$(TF) apply -auto-approve -input=false
+	# Moto ignores tags sent with CreateBucket; a second apply sets them the normal way
+	$(TF) apply -auto-approve -input=false
+	$(TF) plan -detailed-exitcode -input=false
+	# Point the DVC remote at the emulator, in .dvc/config.local (not committed):
+	# the committed config stays what a real AWS account would use
+	$(RUN) dvc remote modify --local s3 endpointurl http://localhost:15100
+	$(RUN) dvc remote modify --local s3 access_key_id test
+	$(RUN) dvc remote modify --local s3 secret_access_key test
+
+mlflow-up:  ## MLflow server on Postgres + S3 (run make infra-up first): http://localhost:5001
+	$(INFRA) --profile mlflow up -d --build --wait
+	@echo "Train against it: MLFLOW_TRACKING_URI=http://localhost:5001 make train-tabular"
+
+mlflow-check:  ## Smoke-check the MLflow server: run to Postgres, artifact to S3, registry, download
+	$(RUN) python -m src.infra.mlflow_check
+
+infra-plan:  ## Show what Terraform would change (exit 2 means drift)
+	$(TF) plan -detailed-exitcode -input=false
+
+infra-check:  ## Check the buckets and IAM roles are safe (versioned, encrypted, private, least privilege)
+	AWS_ENDPOINT_URL=http://localhost:15100 $(RUN) python -m src.infra.storage_check
+
+infra-down:  ## Stop the emulator and MLflow storage (their data is wiped); forget the local Terraform state
+	# Not `terraform destroy`: it rightly refuses to delete buckets that hold data
+	$(INFRA) --profile mlflow down -v
+	rm -f infra/terraform/terraform.tfstate infra/terraform/terraform.tfstate.backup
 
 clean:  ## Remove caches and CI outputs
 	rm -rf reports .pytest_cache .mypy_cache .ruff_cache

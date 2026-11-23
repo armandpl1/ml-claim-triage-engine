@@ -1,6 +1,8 @@
 # CI: lint and types, the three-tier test suite, and a Docker build check.
 #
 #   lint (ruff, mypy) ──> test (unit, behavioral, integration) ──> docker (build + smoke)
+#   lint ──> storage (Terraform on an AWS emulator, then the MLflow server on
+#            Postgres + S3; not a required check)
 #
 # Runs on every pull request and every push to main. Retraining and the
 # champion/challenger gate run in cd-model-gate.yml.
@@ -115,3 +117,66 @@ jobs:
 
       - name: Image size
         run: docker image ls claim-triage-api:ci
+
+  # infra/terraform applied to Moto (an AWS emulator, no account), checked,
+  # then the MLflow server on Postgres + S3 smoke-tested end to end.
+  storage:
+    name: Storage (Terraform + MLflow on an AWS emulator)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.6
+          terraform_wrapper: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Format and validate
+        run: |
+          terraform -chdir=infra/terraform fmt -check -recursive
+          terraform -chdir=infra/terraform init -input=false
+          terraform -chdir=infra/terraform validate
+
+      - name: Security scan (Trivy, fails on any finding)
+        run: |
+          docker run --rm -v "$PWD/infra/terraform:/src" aquasec/trivy:0.67.2 \
+            config --quiet --exit-code 1 /src
+
+      - name: Apply to the emulator; a second plan must show no changes
+        run: make infra-up
+
+      - name: Check the buckets and roles are safe
+        run: make infra-check
+
+      - name: Start MLflow on Postgres + S3 and smoke-test it
+        run: |
+          make mlflow-up
+          make mlflow-check
+
+      - name: Save the emulator and MLflow logs
+        if: ${{ failure() }}
+        run: docker compose -f infra/docker-compose.yml --profile mlflow logs > storage-logs.txt
+
+      - name: Upload the logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: storage-logs
+          path: storage-logs.txt
+          retention-days: 14
