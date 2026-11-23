@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data infra-up infra-plan infra-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data infra-up infra-plan infra-check infra-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -93,6 +93,9 @@ infra-up:  ## Start the AWS emulator (Moto) and apply infra/terraform; a second 
 
 infra-plan:  ## Show what Terraform would change (exit 2 means drift)
 	$(TF) plan -detailed-exitcode -input=false
+
+infra-check:  ## Check the buckets and IAM roles are safe (versioned, encrypted, private, least privilege)
+	AWS_ENDPOINT_URL=http://localhost:15100 $(RUN) python -m src.infra.storage_check
 
 infra-down:  ## Stop the emulator and MLflow storage (their data is wiped); forget the local Terraform state
 	# Not `terraform destroy`: it rightly refuses to delete buckets that hold data
