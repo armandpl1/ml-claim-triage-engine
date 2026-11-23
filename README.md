@@ -13,6 +13,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 | Done    | 7. FastAPI serving in Docker                   |
 | Done    | 8. Observability, drift monitoring and CI/CD   |
 | Planned | 9. LLMs vs the fine-tuned notes model          |
+| Done    | Production storage: S3 (Terraform) + Postgres  |
 
 ## Quick start
 
@@ -290,6 +291,49 @@ TF-IDF baseline, or a large language model with no training at all?
   (model layer with record/replay, bootstrap statistics), built first in
   [agent-eval-lab](https://github.com/armandpl1/agent-eval-lab)
 
+## Production storage: S3 with Terraform, MLflow on Postgres
+
+Steps 1-8 kept everything on the laptop: the DVC remote in `/tmp` and MLflow in a SQLite file plus a folder. This adds storage shaped the way a team would run it. It runs on **Moto**, an open-source AWS emulator, so it needs no AWS account.
+
+| Piece                          | What it does                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `infra/terraform`              | S3 buckets for the DVC remote and MLflow artifacts, plus one for access logs; a KMS key; IAM roles                  |
+| Bucket settings                | Versioning on, KMS encryption with key rotation, public access blocked, access logs, old versions expire in 90 days |
+| `training` role                | Push dataset versions (no deletes in the DVC remote), read and write model artifacts                                |
+| `serving` role                 | Read model artifacts only                                                                                           |
+| DVC remote                     | `s3://claim-triage-dev-dvc`                                                                                         |
+| MLflow server (`infra/mlflow`) | Runs, metrics and the registry in **Postgres**; artifacts in **S3**, sent through the server                        |
+| `src/infra/storage_check.py`   | Reads the buckets and roles back from AWS and fails on any unsafe setting                                           |
+| `src/infra/mlflow_check.py`    | Logs a run, registers a version, downloads it back and finds the file in S3                                         |
+
+```bash
+make infra-up       # start Moto, apply Terraform twice, fail if a third plan shows drift
+make infra-check    # buckets versioned, encrypted, private, logged; roles least privilege
+make push-data      # dataset versions to the S3 bucket
+make mlflow-up      # Postgres + MLflow server at http://localhost:5001
+make mlflow-check   # smoke test of the server, end to end
+MLFLOW_TRACKING_URI=http://localhost:5001 make train-tabular   # train against it
+make infra-down     # stop everything; the emulator's and Postgres's data is wiped
+```
+
+Design choices:
+- **Clients hold no S3 credentials for MLflow.** The server proxies artifacts (`--serve-artifacts`), so training and the API only need the tracking URL. Only the server can reach the bucket.
+- **The committed config is the real-account config.** `.dvc/config` holds only the bucket and region. `make infra-up` writes the emulator's endpoint and fake credentials to `.dvc/config.local`, which is not committed.
+- **The local SQLite store is still the default.** Training uses `mlflow.db` unless `MLFLOW_TRACKING_URI` is set, so nothing changes for existing runs.
+
+How it was verified:
+- Terraform `fmt` and `validate` pass, a Trivy scan finds 0 misconfigurations, and a plan after the second apply shows no changes.
+- `make infra-check` passes. Its unit tests run on moto's in-memory AWS and show that each unsafe setting is reported: versioning off, no public access block, no version expiry, wildcard or destructive actions, deletes in the DVC remote, writes in the serving role.
+- `make push-data` pushed 12 files. A fresh clone pulled them back byte-identical, and the objects in the bucket are KMS-encrypted.
+- `make mlflow-check` passes: the run is stored in Postgres, the artifact lands in the bucket, and the registered version downloads back unchanged.
+- **Real training against the server.** `make train-tabular` with `MLFLOW_TRACKING_URI=http://localhost:5001` (5 min 26 s, memory-capped) logged its 25 Optuna trials to Postgres, stored `model.onnx` in the bucket and registered version 1 as `@challenger`. Every metric matched the committed `artifacts/tabular/metrics.json` exactly (validation PR-AUC 0.0912); only the run ID differed.
+
+Limits, stated honestly:
+- **Moto doesn't enforce IAM.** The roles are checked by reading their policies back, not by being denied an action. A real account would enforce them.
+- **MLflow memory.** MLflow 3 starts background job workers for its GenAI features. They pushed the server past its 768 MB limit, so they are turned off (`MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false`). The server then uses about 400 MB, and Moto, Postgres and MLflow together about 570 MB.
+- **Postgres credentials are local only** (`mlflow`/`mlflow` in the compose file). A real deployment reads them from a secret store.
+- **The serving stack (`make up`) still uses the local SQLite store.** Moving the API to the server is part of the Kubernetes step.
+
 ## Running the heavy steps on a laptop
 
 Fine-tuning and Optuna can use several GB of RAM. Running two at once got processes killed by the Linux out-of-memory daemon, including the desktop session. Run one heavy job at a time, ideally in a memory-capped scope:
@@ -312,6 +356,9 @@ src/features/                split, preprocessing, tokenizer, shared row feature
 src/training/                tabular.py, nlp.py, onnx_export.py, benchmark.py, text_baseline.py
 src/evaluation/              scoring.py (scorecards), gate.py (champion vs challenger)
 src/serving/                 FastAPI app, schemas, model loading, tokenizer
+src/infra/                   storage_check.py (S3 and IAM), mlflow_check.py (server smoke test)
+infra/terraform/             S3 buckets, KMS key, IAM roles (applied to Moto locally)
+infra/docker-compose.yml     Moto, Postgres and the MLflow server (infra/mlflow)
 monitoring/                  drift detector, traffic simulator, Prometheus and Grafana config
 tests/                       unit/, behavioral/, integration/
 artifacts/                   metrics, gate decisions and benchmark (JSON); models live in MLflow
