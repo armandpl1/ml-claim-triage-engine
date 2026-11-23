@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,6 +12,7 @@ from pydantic import ValidationError
 from src.common.config import ROOT
 from src.features.row import log_density
 from src.features.transform import add_row_features
+from src.serving import model_store
 from src.serving.app import softmax, tabular_feeds
 from src.serving.schemas import ClaimRequest
 from src.training.onnx_export import onnx_inputs
@@ -125,3 +128,45 @@ def test_bundled_model_keeps_external_weights(tmp_path):
     session = ort.InferenceSession(str(target), providers=["CPUExecutionProvider"])
     out = session.run(None, {"x": np.ones(2048, dtype=np.float32)})[0]
     assert out[5] == 6.0
+
+
+def _fake_champions(monkeypatch, tmp_path, available: set[str]):
+    def download(name, target):
+        if name not in available:
+            raise RuntimeError(f"no @champion for {name}")
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "model.onnx").write_text(f"onnx of {name}")
+        return {
+            "version": "3",
+            "tags": {"decision_threshold": "0.08"},
+            "onnx": str(target / "model.onnx"),
+        }
+
+    monkeypatch.setattr(model_store, "_download_champion", download)
+    monkeypatch.setattr(model_store, "single_file_onnx", lambda src, dst: shutil.copy(src, dst))
+    tokenizer = tmp_path / "tok"
+    tokenizer.mkdir(exist_ok=True)
+    (tokenizer / "tokenizer.json").write_text("{}")
+    monkeypatch.setattr(model_store, "TOKENIZER_DIR", tokenizer)
+
+
+def test_bundle_without_a_notes_champion_is_tabular_only(monkeypatch, tmp_path):
+    _fake_champions(monkeypatch, tmp_path, {model_store.TABULAR_MODEL})
+    meta = model_store.export_bundle(tmp_path / "bundle")
+    assert set(meta) == {"tabular"}
+    assert sorted(p.name for p in (tmp_path / "bundle").iterdir()) == [
+        "metadata.json",
+        "tabular.onnx",
+        "tokenizer.json",
+    ]
+
+
+def test_a_failed_export_keeps_the_working_bundle(monkeypatch, tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "tabular.onnx").write_text("the working model")
+    _fake_champions(monkeypatch, tmp_path, set())  # registry has no champion at all
+    with pytest.raises(RuntimeError, match="no @champion"):
+        model_store.export_bundle(bundle)
+    assert (bundle / "tabular.onnx").read_text() == "the working model"
+    assert not (tmp_path / "bundle.new").exists()

@@ -31,3 +31,6 @@ infra/terraform/terraform.tfstate*
 
 # Batch scoring store (predictions, outcomes), rebuilt by make batch-backfill
 data/batch/
+
+# Dagster instance (runs, event logs); settings come from src/orchestration/dagster.yaml
+.dagster/

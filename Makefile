@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data batch-score batch-backfill infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -85,6 +85,23 @@ batch-score:  ## Score the claims reported on one day: make batch-score DATE=202
 
 batch-backfill:  ## Replay every night: score, outcomes, weekly performance (SCENARIO=inflation)
 	$(RUN) python -m src.batch.backfill --scenario $(or $(SCENARIO),none)
+
+DAGSTER := DAGSTER_HOME=$(CURDIR)/.dagster $(RUN) dagster
+DAGSTER_DEFS := -m src.orchestration.definitions
+MEMORY_CAP ?= 2500M
+
+.dagster/dagster.yaml: src/orchestration/dagster.yaml
+	mkdir -p .dagster
+	cp $< $@
+
+orchestrate: .dagster/dagster.yaml  ## Dagster UI (assets, jobs, schedule, sensors): http://localhost:3001
+	$(DAGSTER) dev $(DAGSTER_DEFS) -p 3001
+
+retrain: .dagster/dagster.yaml  ## Retrain the triage model with Dagster: data, train, gate, bundle (~6 min)
+	CLAIM_TRIAGE_MEMORY_CAP=$(MEMORY_CAP) $(DAGSTER) job execute $(DAGSTER_DEFS) -j retrain_tabular
+
+nightly: .dagster/dagster.yaml  ## One night of the batch job with Dagster: make nightly DATE=2025-06-15
+	$(DAGSTER) job execute $(DAGSTER_DEFS) -j nightly_batch --tags '{"dagster/partition": "$(DATE)"}'
 
 TF := terraform -chdir=infra/terraform
 INFRA := docker compose -f infra/docker-compose.yml

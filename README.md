@@ -15,6 +15,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 | Planned | 9. LLMs vs the fine-tuned notes model          |
 | Done    | Production storage: S3 (Terraform) + Postgres  |
 | Done    | Batch scoring and delayed-label monitoring     |
+| Done    | Orchestration with Dagster                     |
 
 ## Quick start
 
@@ -374,6 +375,42 @@ Honest findings:
 - **Detection took 132 days** (inflation from 2025-02-03, alert on 2025-06-15). Waiting for labels to settle is slow. The first inflated cohort (6.1% vs 4.5%) missed the 99% interval narrowly. Faster options: judge early outcomes against how early outcomes usually look at the same age, or pool cohorts after a suspected change.
 - **Recall fell a little but didn't alert.** In the two inflated cohorts recall went from 0.143 and 0.149 to 0.129 and 0.125. With 40-70 high-cost claims per cohort, a recall interval spans about 0.05-0.28, so only a large drop is provable.
 
+## Orchestration with Dagster
+
+The steps above ran as separate `make` targets. Dagster runs them as one system: assets with lineage, jobs, a nightly schedule, and a sensor that turns an alert into a retraining run. `make orchestrate` opens the UI at http://localhost:3001.
+
+| Piece                         | What it does                                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------------------------------- |
+| `retrain_tabular` job         | `training_data` (dvc repro) → `tabular_challenger` → `tabular_gate` → `serving_bundle`         |
+| `retrain_notes` job           | The same for the notes model; kept apart because fine-tuning takes about an hour on a CPU      |
+| `nightly_batch` job           | `batch_predictions` → `claim_outcomes` → `model_performance`, one partition per night          |
+| `no_performance_alerts` check | Fails (as a warning) when a settled cohort alerts; `no_feature_drift` does the same for drift  |
+| `retrain_on_alert` sensor     | Requests `retrain_tabular` when performance is degraded or features drift, at most once a week |
+| `log_failed_runs` sensor      | Logs every failed run as one structured event                                                  |
+| Nightly schedule              | 02:00, built from the partitions; stopped by default, like the retrain sensor                  |
+
+```bash
+make orchestrate                 # the UI: lineage, runs, backfills, schedule, sensors
+make nightly DATE=2025-06-15     # one night of the batch path
+make retrain                     # data, train, gate, bundle (~6 min, memory-capped)
+```
+
+Design choices:
+- **Every step is a subprocess** running the Makefile's command, so the Dagster process stays small and an out-of-memory training run can't take it down. `make retrain` caps training at 2.5 GB (`MEMORY_CAP`), as for every heavy job here.
+- **A rejected challenger is an outcome, not a failure.** The gate asset records `promoted: false`; the run succeeds and the old champion keeps serving.
+- **Nights run one at a time, in order.** The outcomes table holds everything known *by* a night, so two nights in parallel would race. Batch runs carry a tag limited to one concurrent run (`src/orchestration/dagster.yaml`).
+- **One retrain per week at most.** A degraded model alerts every night until it's fixed; one retrain, judged by the gate, is the useful response.
+- **The bundle export can't break serving.** The new bundle is built next to the old one and swapped in only when complete. Before this change, a failed export deleted the working bundle first.
+
+How it was verified:
+- **Alert to retrain, end to end.** After the inflation backfill, `make nightly DATE=2025-06-15` (scenario `inflation`) recorded `model_performance` as degraded and the `no_performance_alerts` check failed as a warning while the run succeeded. `dagster sensor preview retrain_on_alert` on the same instance then requested one `retrain_tabular` run, reason `model_performance=degraded`.
+- **A real retrain through Dagster** (`make retrain` against the Postgres + S3 MLflow server, so the local registry stayed untouched) took 4 minutes: `training_data` 3.4 s (nothing to re-run), `tabular_challenger` 3 min 7 s, then the gate. With no champion on that registry, it promoted the challenger for beating the naive baseline (PR-AUC 0.0738 vs 0.0695) within the latency budget, and `serving_bundle` exported a tabular-only bundle.
+- Unit tests run the jobs with a fake command runner (command order, rejection vs failure, memory cap), real nights on fixture claims (scoring, outcomes, the check), and the sensor's rules (trigger, each result used once, cooldown) against a test Dagster instance.
+
+Limits, stated honestly:
+- **Retraining on the same data can't fix inflation.** The retrain job trains on the same training split. To learn the new costs, the training data has to include the newly settled claims, which is a data change, not a scheduling one. The sensor and the gate make the loop safe; they don't make it smart.
+- **The schedule runs on 2025 dates.** The simulation's nights are in 2025, so the schedule would find nothing to run today. Backfills over the partitions (in the UI) replay the period, like `make batch-backfill`.
+
 ## Running the heavy steps on a laptop
 
 Fine-tuning and Optuna can use several GB of RAM. Running two at once got processes killed by the Linux out-of-memory daemon, including the desktop session. Run one heavy job at a time, ideally in a memory-capped scope:
@@ -397,6 +434,7 @@ src/features/                split, preprocessing, tokenizer, shared row feature
 src/training/                tabular.py, nlp.py, onnx_export.py, benchmark.py, text_baseline.py
 src/evaluation/              scoring.py (scorecards), gate.py (champion vs challenger)
 src/serving/                 FastAPI app, schemas, model loading, tokenizer
+src/orchestration/           Dagster assets, jobs, schedule, sensors (dagster.yaml: run limits)
 src/batch/                   nightly scoring, outcomes, delayed-label performance, backfill
 src/infra/                   storage_check.py (S3 and IAM), mlflow_check.py (server smoke test)
 infra/terraform/             S3 buckets, KMS key, IAM roles (applied to Moto locally)

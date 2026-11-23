@@ -58,10 +58,14 @@ train = [
     "torch>=2.5",
     "transformers>=4.46",
 ]
+orchestrate = [
+    "dagster>=1.13.31",
+    "dagster-webserver>=1.13.31",
+]
 
 [tool.uv]
 package = false
-default-groups = ["pipeline", "train", "serve", "dev"]
+default-groups = ["pipeline", "train", "serve", "dev", "orchestrate"]
 
 # CPU-only PyTorch: skips ~2 GB of CUDA libraries a laptop CPU can't use.
 [tool.uv.sources]
