@@ -38,3 +38,6 @@ data/batch/
 
 # Dagster instance (runs, event logs); settings come from src/orchestration/dagster.yaml
 .dagster/
+
+# kind cluster config, generated from infra/k8s/kind-config.yaml.tmpl by make k8s-up
+.kind/

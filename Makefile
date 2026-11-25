@@ -4,10 +4,10 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-down clean
 
 help:  ## List targets
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 install:  ## Install dependencies from uv.lock and the git pre-commit hooks
 	uv sync --locked
@@ -151,3 +151,26 @@ infra-down:  ## Stop the emulator and MLflow storage (their data is wiped); forg
 
 clean:  ## Remove caches and CI outputs
 	rm -rf reports .pytest_cache .mypy_cache .ruff_cache
+
+# Kubernetes (step 6): a one-node kind cluster, the API's Helm chart, a canary
+# release and a k6 load test. Stop other stacks first (make down, make
+# infra-down): the cluster needs about 2 GB of RAM.
+KIND_CLUSTER := claim-triage
+K8S_CONFIG := .kind/kind-config.yaml
+METRICS_SERVER_CHART := 3.12.2
+
+k8s-tools:  ## Install kind, kubectl, helm and k6 (pinned, checksum-verified) into ~/.local/bin
+	infra/k8s/install_tools.sh
+
+k8s-up:  ## Start the one-node kind cluster with metrics-server (for autoscaling)
+	mkdir -p .kind
+	sed 's|__REPO__|$(CURDIR)|g' infra/k8s/kind-config.yaml.tmpl > $(K8S_CONFIG)
+	kind get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || kind create cluster --config $(K8S_CONFIG) --wait 120s
+	helm upgrade --install metrics-server metrics-server \
+		--repo https://kubernetes-sigs.github.io/metrics-server/ --version $(METRICS_SERVER_CHART) \
+		--namespace kube-system --set 'args={--kubelet-insecure-tls}' \
+		--set resources.requests.memory=40Mi --wait --timeout 3m
+	kubectl get nodes
+
+k8s-down:  ## Delete the kind cluster (frees its RAM)
+	kind delete cluster --name $(KIND_CLUSTER)
