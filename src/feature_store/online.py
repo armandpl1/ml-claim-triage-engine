@@ -8,6 +8,7 @@ the offline store; the API opens it read-only.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +17,8 @@ META = "materializations"
 
 
 class OnlineStore:
-    """Read-only lookups. One connection per store, safe across threads
-    because SQLite opened read-only never writes."""
+    """Read-only lookups over one connection, shared by the API's worker
+    threads; a lock serializes them (a lookup takes microseconds)."""
 
     def __init__(self, path: Path) -> None:
         if not path.exists():
@@ -25,19 +26,23 @@ class OnlineStore:
         self.path = path
         self._con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
         self._con.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
 
     def get(self, policy_id: int) -> dict[str, Any] | None:
         """The policy's features and their valid_from, or None if unknown."""
-        row = self._con.execute(
-            f"SELECT * FROM {TABLE} WHERE policy_id = ?", (policy_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._con.execute(
+                f"SELECT * FROM {TABLE} WHERE policy_id = ?", (policy_id,)
+            ).fetchone()
         return dict(row) if row else None
 
     def info(self) -> dict[str, Any]:
         """When the store was materialized, as of which time, and how many rows."""
-        row = self._con.execute(
-            f"SELECT as_of, materialized_at, row_count FROM {META} ORDER BY materialized_at DESC"
-        ).fetchone()
+        with self._lock:
+            row = self._con.execute(
+                f"SELECT as_of, materialized_at, row_count FROM {META}"
+                " ORDER BY materialized_at DESC"
+            ).fetchone()
         return dict(row) if row else {}
 
     def close(self) -> None:

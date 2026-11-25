@@ -3,6 +3,11 @@
     GET  /health    model versions, where they were loaded from, uptime
     POST /predict   one claim: high-cost probability and route, plus the
                     note's category if an adjuster note is sent
+    POST /predict/policy
+                    the same, for a claim sent with only its policy_id: the
+                    features come from the online feature store
+                    (src/feature_store/online.py), so callers can't send
+                    stale or hand-typed values
     GET  /metrics   Prometheus metrics: requests, errors, latency, routes
 
 Models load once at startup (src/serving/model_store.py). Every prediction is
@@ -26,15 +31,23 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from fastapi import BackgroundTasks, FastAPI, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 from src.common.config import ROOT
+from src.feature_store.online import OnlineStore
 from src.features.row import log_density
 from src.serving.model_store import LoadedModels, load_models
-from src.serving.schemas import ClaimPrediction, ClaimRequest, Health, NotePrediction
+from src.serving.schemas import (
+    ClaimPrediction,
+    ClaimRequest,
+    Health,
+    NotePrediction,
+    PolicyClaimRequest,
+)
 
 INFERENCE_LOG = Path(os.environ.get("INFERENCE_LOG_PATH", ROOT / "data/inference/inference_log.db"))
+ONLINE_STORE = Path(os.environ.get("ONLINE_STORE_PATH", ROOT / "data/feature_store/online.db"))
 NUMERIC = ["exposure", "vehicle_power", "vehicle_age", "driver_age", "bonus_malus", "log_density"]
 CATEGORICAL = ["area", "vehicle_brand", "fuel_type", "region"]
 
@@ -86,10 +99,14 @@ def write_log(row: dict) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.models = load_models()
+    # Optional: without a store, /predict/policy answers 503 and /predict works.
+    app.state.online = OnlineStore(ONLINE_STORE) if ONLINE_STORE.exists() else None
     app.state.started = time.time()
     for name, version in app.state.models.versions.items():
         MODEL_VERSION.labels(model=name).set(float(version))
     yield
+    if app.state.online:
+        app.state.online.close()
 
 
 app = FastAPI(title="Claim triage API", version="1.0", lifespan=lifespan)
@@ -116,12 +133,41 @@ def health(request: Request) -> Health:
         models=models.versions,
         source=models.source,
         uptime_seconds=round(time.time() - request.app.state.started, 1),
+        online_store=request.app.state.online.info() if request.app.state.online else None,
     )
 
 
 @app.post("/predict", response_model=ClaimPrediction)
 def predict(claim: ClaimRequest, request: Request, background: BackgroundTasks) -> ClaimPrediction:
+    return score_claim(claim, request, background, time.perf_counter())
+
+
+@app.post("/predict/policy", response_model=ClaimPrediction)
+def predict_policy(
+    body: PolicyClaimRequest, request: Request, background: BackgroundTasks
+) -> ClaimPrediction:
     started = time.perf_counter()
+    store: OnlineStore | None = request.app.state.online
+    if store is None:
+        raise HTTPException(503, "online feature store not loaded: run `make materialize`")
+    features = store.get(body.policy_id)
+    if features is None:
+        raise HTTPException(404, f"policy {body.policy_id} not in the online feature store")
+    valid_from = features.pop("valid_from")
+    features.pop("policy_id")
+    # Same validation as a hand-sent claim: store values must meet the contracts too.
+    claim = ClaimRequest(claim_id=body.claim_id, adjuster_note=body.adjuster_note, **features)
+    return score_claim(claim, request, background, started, feature_valid_from=valid_from)
+
+
+def score_claim(
+    claim: ClaimRequest,
+    request: Request,
+    background: BackgroundTasks,
+    started: float,
+    feature_valid_from: str | None = None,
+) -> ClaimPrediction:
+    """Route one claim, and log it after the response is sent."""
     models: LoadedModels = request.app.state.models
     probability = float(models.tabular.run(None, tabular_feeds(claim))[1][0, 1])
     route: Literal["senior_adjuster", "standard"] = (
@@ -150,6 +196,7 @@ def predict(claim: ClaimRequest, request: Request, background: BackgroundTasks) 
         note=note,
         model_versions=models.versions,
         latency_ms=round((time.perf_counter() - started) * 1000, 3),
+        feature_valid_from=feature_valid_from,
     )
     features = claim.model_dump(exclude={"claim_id", "adjuster_note"})
     background.add_task(
