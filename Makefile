@@ -213,15 +213,21 @@ deploy:  ## Deploy an environment's pinned image and its models: make deploy ENV
 	@case "$(ENV)" in staging|prod) ;; *) echo "ENV must be staging or prod (dev: make k8s-deploy)"; exit 1;; esac
 	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.model_store \
 		--alias $(ENV) --notes-alias $(ENV) --out serving_bundle_$(ENV)
+	# GHCR first, so a released tag always replaces a local stand-in of the
+	# same name; a local image is used only when the tag isn't released yet.
+	# The image ID and the bundle hash are pod annotations: different content
+	# under an unchanged tag still restarts the pods (it didn't for 1.0.0).
 	image=$$($(RUN) python -c "import yaml; i = yaml.safe_load(open('infra/k8s/environments/$(ENV).yaml'))['image']; print(i['repository'] + ':' + i['tag'])"); \
-	docker image inspect $$image >/dev/null 2>&1 || docker pull $$image || \
+	docker pull --quiet $$image >/dev/null 2>&1 || docker image inspect $$image >/dev/null 2>&1 || \
 		{ echo "$$image is not on GHCR (or not public) yet; to test before the release: make image-local VERSION=<tag>"; exit 1; }; \
 	[ -n "$$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' $$image)" ] || \
 		echo "WARNING: $$image is a local stand-in (make image-local), not the released image"; \
-	kind load docker-image $$image --name $(KIND_CLUSTER)
+	kind load docker-image $$image --name $(KIND_CLUSTER) && \
+	id=$$(docker image inspect -f '{{.Id}}' $$image | cut -d: -f2 | cut -c1-12); \
 	rev=$$(sha256sum serving_bundle_$(ENV)/metadata.json | cut -c1-12); \
 	helm upgrade --install claim-triage-api $(CHART) --namespace $(ENV) --create-namespace \
-		--values infra/k8s/environments/$(ENV).yaml --set models.revision=$$rev --wait --timeout 3m
+		--values infra/k8s/environments/$(ENV).yaml --set models.revision=$$rev \
+		--set-string image.id=$$id --wait --timeout 3m
 	kubectl get pods -n $(ENV) -o wide
 
 rollback-release:  ## Put an environment back on its previous Helm release (image and settings): make rollback-release ENV=prod
