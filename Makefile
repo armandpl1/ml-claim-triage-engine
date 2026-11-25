@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke deploy image-local canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest envs promote rollback-model alerts-check k8s-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke deploy image-local canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest envs promote rollback-model rollback-release alerts-check k8s-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -223,6 +223,11 @@ deploy:  ## Deploy an environment's pinned image and its models: make deploy ENV
 	helm upgrade --install claim-triage-api $(CHART) --namespace $(ENV) --create-namespace \
 		--values infra/k8s/environments/$(ENV).yaml --set models.revision=$$rev --wait --timeout 3m
 	kubectl get pods -n $(ENV) -o wide
+
+rollback-release:  ## Put an environment back on its previous Helm release (image and settings): make rollback-release ENV=prod
+	helm history claim-triage-api --namespace $(ENV) --max 5
+	helm rollback claim-triage-api --namespace $(ENV) --wait --timeout 3m
+	kubectl rollout status deployment/claim-triage-api-stable --namespace $(ENV) --timeout 3m
 
 image-local:  ## Stand-in for a release not yet on GHCR, built from the working tree: make image-local VERSION=1.0.0
 	@test -n "$(VERSION)" || { echo "VERSION is required"; exit 1; }
