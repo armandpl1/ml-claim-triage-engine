@@ -93,6 +93,10 @@ def test_health_reports_the_store(client, raw_policies):
     store = client.get("/health").json()["online_store"]
     assert store["row_count"] == len(raw_policies)
     assert store["as_of"].startswith("2026-01-01")
+    metrics = client.get("/metrics").text
+    expected = datetime(2026, 1, 1).timestamp()
+    line = next(m for m in metrics.splitlines() if m.startswith("claim_api_online_store_as_of"))
+    assert float(line.split()[-1]) == expected
 
 
 def test_without_a_store_policy_requests_are_503(tmp_path, monkeypatch):

@@ -27,6 +27,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -69,6 +70,11 @@ ROUTES = Counter("claim_api_routes_total", "Triage decisions", ["route"])
 NOTE_CATEGORIES = Counter(
     "claim_api_note_categories_total", "Predicted note categories", ["category"]
 )
+# When the loaded online store's features were current (its as_of), so an
+# alert can fire if no fresh materialization reaches the API (docs/slo.md).
+ONLINE_STORE_AS_OF = Gauge(
+    "claim_api_online_store_as_of_seconds", "Unix time the online store's features are as of"
+)
 MODEL_VERSION = Gauge("claim_api_model_version", "Serving model version", ["model"])
 
 
@@ -94,6 +100,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Optional: without a store, /predict/policy answers 503 and /predict works.
     # Copied into memory: lookups never wait on the disk.
     app.state.online = OnlineStore(ONLINE_STORE, in_memory=True) if ONLINE_STORE.exists() else None
+    if app.state.online and app.state.online.info().get("as_of"):
+        as_of = datetime.fromisoformat(str(app.state.online.info()["as_of"]))
+        ONLINE_STORE_AS_OF.set(as_of.timestamp())
     app.state.started = time.time()
     for name, version in app.state.models.versions.items():
         MODEL_VERSION.labels(model=name).set(float(version))

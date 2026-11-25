@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke deploy image-local canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest envs promote rollback-model k8s-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke deploy image-local canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest envs promote rollback-model alerts-check k8s-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -264,6 +264,12 @@ canary-promote:  ## Promote the canary's models to prod (must still be @staging)
 	$(MAKE) promote ENV=prod
 	$(MAKE) deploy ENV=prod
 	helm uninstall claim-triage-api-canary --namespace prod --wait
+
+PROMETHEUS_IMAGE := prom/prometheus:v3.5.0
+
+alerts-check:  ## Validate the SLO alert rules and run their unit tests (promtool)
+	docker run --rm -v "$(CURDIR)/monitoring:/m:ro" -w /m --entrypoint promtool $(PROMETHEUS_IMAGE) check rules alerts.yml
+	docker run --rm -v "$(CURDIR)/monitoring:/m:ro" -w /m --entrypoint promtool $(PROMETHEUS_IMAGE) test rules alerts_test.yml
 
 LOADTEST_DIR := reports/loadtest
 

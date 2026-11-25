@@ -1,0 +1,143 @@
+# Prometheus rules for the claim triage API's service-level objectives
+# (docs/slo.md). Unit-tested in monitoring/alerts_test.yml: make alerts-check.
+#
+# Budget-burn alerts, the Google SRE workbook's multiwindow pattern: page
+# when the budget burns 14.4x faster than allowed (2% of a 28-day budget in
+# an hour), open a ticket at 6x (5% in 6 hours). Each needs a long window
+# (the burn is real) and a short one (it is still happening), so it fires
+# quickly and clears quickly.
+#
+# Only the prediction endpoints count. 4xx answers are the caller's error
+# (a 422 for out-of-contract input, a 404 for an unknown policy), so they
+# don't spend the budget; 5xx answers (including a 503 when the online store
+# isn't loaded) do.
+
+groups:
+  - name: claim-triage-slo-ratios
+    rules:
+      # Share of prediction requests that failed (5xx), per window. `or
+      # vector(0)`: with no 5xx yet the error series doesn't exist, and the
+      # ratio would be missing instead of 0 (found against the live API).
+      - record: claim_api:error_ratio:rate5m
+        expr: >-
+          (sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy", status=~"5.."}[5m])) or vector(0))
+          / sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy"}[5m]))
+      - record: claim_api:error_ratio:rate30m
+        expr: >-
+          (sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy", status=~"5.."}[30m])) or vector(0))
+          / sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy"}[30m]))
+      - record: claim_api:error_ratio:rate1h
+        expr: >-
+          (sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy", status=~"5.."}[1h])) or vector(0))
+          / sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy"}[1h]))
+      - record: claim_api:error_ratio:rate6h
+        expr: >-
+          (sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy", status=~"5.."}[6h])) or vector(0))
+          / sum(rate(claim_api_requests_total{endpoint=~"/predict|/predict/policy"}[6h]))
+
+      # Share of requests slower than the endpoint's latency objective:
+      # /predict/policy 100 ms, /predict 250 ms (histogram bucket bounds)
+      - record: claim_api:slow_ratio:rate5m
+        labels: {endpoint: /predict/policy}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict/policy", le="0.1"}[5m]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict/policy"}[5m]))
+      - record: claim_api:slow_ratio:rate1h
+        labels: {endpoint: /predict/policy}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict/policy", le="0.1"}[1h]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict/policy"}[1h]))
+      - record: claim_api:slow_ratio:rate30m
+        labels: {endpoint: /predict/policy}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict/policy", le="0.1"}[30m]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict/policy"}[30m]))
+      - record: claim_api:slow_ratio:rate6h
+        labels: {endpoint: /predict/policy}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict/policy", le="0.1"}[6h]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict/policy"}[6h]))
+      - record: claim_api:slow_ratio:rate5m
+        labels: {endpoint: /predict}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict", le="0.25"}[5m]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict"}[5m]))
+      - record: claim_api:slow_ratio:rate1h
+        labels: {endpoint: /predict}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict", le="0.25"}[1h]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict"}[1h]))
+      - record: claim_api:slow_ratio:rate30m
+        labels: {endpoint: /predict}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict", le="0.25"}[30m]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict"}[30m]))
+      - record: claim_api:slow_ratio:rate6h
+        labels: {endpoint: /predict}
+        expr: >-
+          1 - sum(rate(claim_api_request_seconds_bucket{endpoint="/predict", le="0.25"}[6h]))
+          / sum(rate(claim_api_request_seconds_count{endpoint="/predict"}[6h]))
+
+  - name: claim-triage-slo-alerts
+    rules:
+      # Availability: 99.5% of prediction requests succeed (budget 0.5%)
+      - alert: ClaimApiErrorBudgetFastBurn
+        expr: claim_api:error_ratio:rate1h > 14.4 * 0.005 and claim_api:error_ratio:rate5m > 14.4 * 0.005
+        for: 2m
+        labels: {severity: page, slo: availability}
+        annotations:
+          summary: "Prediction errors are burning the error budget 14x too fast"
+          description: "{{ $value | humanizePercentage }} of prediction requests failed in the last hour (objective: under 0.5%)."
+          runbook: docs/runbooks/bad-release.md
+      - alert: ClaimApiErrorBudgetSlowBurn
+        expr: claim_api:error_ratio:rate6h > 6 * 0.005 and claim_api:error_ratio:rate30m > 6 * 0.005
+        for: 15m
+        labels: {severity: ticket, slo: availability}
+        annotations:
+          summary: "Prediction errors are burning the error budget 6x too fast"
+          description: "{{ $value | humanizePercentage }} of prediction requests failed in the last 6 hours (objective: under 0.5%)."
+          runbook: docs/runbooks/bad-release.md
+
+      # Latency: 99% of requests within the endpoint's objective (budget 1%)
+      - alert: ClaimApiLatencyBudgetFastBurn
+        expr: claim_api:slow_ratio:rate1h > 14.4 * 0.01 and claim_api:slow_ratio:rate5m > 14.4 * 0.01
+        for: 2m
+        labels: {severity: page, slo: latency}
+        annotations:
+          summary: "{{ $labels.endpoint }} is too slow for its latency objective"
+          description: "{{ $value | humanizePercentage }} of {{ $labels.endpoint }} requests missed the objective in the last hour (allowed: 1%)."
+          runbook: docs/runbooks/slow-api.md
+      - alert: ClaimApiLatencyBudgetSlowBurn
+        expr: claim_api:slow_ratio:rate6h > 6 * 0.01 and claim_api:slow_ratio:rate30m > 6 * 0.01
+        for: 15m
+        labels: {severity: ticket, slo: latency}
+        annotations:
+          summary: "{{ $labels.endpoint }} keeps missing its latency objective"
+          description: "{{ $value | humanizePercentage }} of {{ $labels.endpoint }} requests missed the objective in the last 6 hours (allowed: 1%)."
+          runbook: docs/runbooks/slow-api.md
+
+  - name: claim-triage-operations
+    rules:
+      - alert: ClaimApiDown
+        expr: up{job="claim-triage-api"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Prometheus can't scrape the claim triage API"
+          description: "{{ $labels.instance }} has been unreachable for 2 minutes."
+          runbook: docs/runbooks/bad-release.md
+      - alert: ClaimApiInferenceLogDropping
+        expr: increase(claim_api_inference_log_errors_total[15m]) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Inference log rows are being dropped"
+          description: "Rows were dropped in the last 15 minutes, so drift monitoring sees an incomplete sample. Predictions are unaffected."
+          runbook: docs/runbooks/stale-features.md
+      - alert: ClaimApiOnlineStoreStale
+        expr: time() - claim_api_online_store_as_of_seconds > 36 * 3600
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The online feature store the API serves is over 36 hours old"
+          description: "Features are as of {{ $value | humanizeDuration }} ago; nightly materialization should keep this under a day."
+          runbook: docs/runbooks/stale-features.md

@@ -2,6 +2,7 @@
 #
 #   lint (ruff, mypy) ──> test (unit, behavioral, integration) ──> docker (build + smoke)
 #   lint ──> helm (lint, render and scan the Kubernetes chart; not a required check)
+#   lint ──> alerts (promtool: the SLO alert rules and their unit tests)
 #   lint ──> storage (Terraform on an AWS emulator, then the MLflow server on
 #            Postgres + S3; not a required check)
 #
@@ -234,3 +235,17 @@ jobs:
           name: helm-rendered
           path: rendered/
           retention-days: 14
+
+  alerts:
+    name: Alert rules (promtool check and unit tests)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate the rules and run their tests (same Prometheus as docker compose)
+        run: make alerts-check

@@ -1,0 +1,148 @@
+# Unit tests for monitoring/alerts.yml: promtool feeds made-up series through
+# the rules and checks which alerts fire. Run: make alerts-check
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 10% of prediction requests fail: both availability alerts fire
+  - interval: 1m
+    input_series:
+      - series: 'claim_api_requests_total{endpoint="/predict", status="200"}'
+        values: '0+90x80'
+      - series: 'claim_api_requests_total{endpoint="/predict", status="500"}'
+        values: '0+10x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ClaimApiErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels: {severity: page, slo: availability}
+            exp_annotations:
+              summary: "Prediction errors are burning the error budget 14x too fast"
+              description: "10% of prediction requests failed in the last hour (objective: under 0.5%)."
+              runbook: docs/runbooks/bad-release.md
+      - eval_time: 70m
+        alertname: ClaimApiErrorBudgetSlowBurn
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: availability}
+            exp_annotations:
+              summary: "Prediction errors are burning the error budget 6x too fast"
+              description: "10% of prediction requests failed in the last 6 hours (objective: under 0.5%)."
+              runbook: docs/runbooks/bad-release.md
+
+  # 0.1% errors (within the 0.5% budget) and 4xx answers: nothing fires
+  - interval: 1m
+    input_series:
+      - series: 'claim_api_requests_total{endpoint="/predict/policy", status="200"}'
+        values: '0+999x80'
+      - series: 'claim_api_requests_total{endpoint="/predict/policy", status="500"}'
+        values: '0+1x80'
+      - series: 'claim_api_requests_total{endpoint="/predict/policy", status="404"}'
+        values: '0+300x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ClaimApiErrorBudgetFastBurn
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: ClaimApiErrorBudgetSlowBurn
+        exp_alerts: []
+
+  # 30% of /predict/policy requests slower than 100 ms: its latency alerts
+  # fire; /predict, within its objective, doesn't
+  - interval: 1m
+    input_series:
+      - series: 'claim_api_request_seconds_bucket{endpoint="/predict/policy", le="0.1"}'
+        values: '0+70x80'
+      - series: 'claim_api_request_seconds_count{endpoint="/predict/policy"}'
+        values: '0+100x80'
+      - series: 'claim_api_request_seconds_bucket{endpoint="/predict", le="0.25"}'
+        values: '0+100x80'
+      - series: 'claim_api_request_seconds_count{endpoint="/predict"}'
+        values: '0+100x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ClaimApiLatencyBudgetFastBurn
+        exp_alerts:
+          - exp_labels: {severity: page, slo: latency, endpoint: /predict/policy}
+            exp_annotations:
+              summary: "/predict/policy is too slow for its latency objective"
+              description: "30% of /predict/policy requests missed the objective in the last hour (allowed: 1%)."
+              runbook: docs/runbooks/slow-api.md
+      - eval_time: 70m
+        alertname: ClaimApiLatencyBudgetSlowBurn
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: latency, endpoint: /predict/policy}
+            exp_annotations:
+              summary: "/predict/policy keeps missing its latency objective"
+              description: "30% of /predict/policy requests missed the objective in the last 6 hours (allowed: 1%)."
+              runbook: docs/runbooks/slow-api.md
+
+  # A burst that already stopped: the short window clears the page
+  - interval: 1m
+    input_series:
+      - series: 'claim_api_requests_total{endpoint="/predict", status="200"}'
+        values: '0+90x80'
+      - series: 'claim_api_requests_total{endpoint="/predict", status="500"}'
+        values: '0+10x40 400+0x40'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ClaimApiErrorBudgetFastBurn
+        exp_alerts: []
+
+  # Operations: the API unreachable, log rows dropped, a stale online store
+  - interval: 1m
+    input_series:
+      - series: 'up{job="claim-triage-api", instance="api:8000"}'
+        values: '0x20'
+      - series: 'claim_api_inference_log_errors_total'
+        values: '0 0 0 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5'
+      - series: 'claim_api_online_store_as_of_seconds{instance="api:8000"}'
+        values: '-200000x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ClaimApiDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: claim-triage-api, instance: "api:8000"}
+            exp_annotations:
+              summary: "Prometheus can't scrape the claim triage API"
+              description: "api:8000 has been unreachable for 2 minutes."
+              runbook: docs/runbooks/bad-release.md
+      - eval_time: 10m
+        alertname: ClaimApiInferenceLogDropping
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Inference log rows are being dropped"
+              description: "Rows were dropped in the last 15 minutes, so drift monitoring sees an incomplete sample. Predictions are unaffected."
+              runbook: docs/runbooks/stale-features.md
+      - eval_time: 15m
+        alertname: ClaimApiOnlineStoreStale
+        exp_alerts:
+          - exp_labels: {severity: ticket, instance: "api:8000"}
+            exp_annotations:
+              summary: "The online feature store the API serves is over 36 hours old"
+              description: "Features are as of 2d 7h 48m 20s ago; nightly materialization should keep this under a day."
+              runbook: docs/runbooks/stale-features.md
+
+  # A store materialized today: not stale
+  - interval: 1m
+    input_series:
+      - series: 'claim_api_online_store_as_of_seconds{instance="api:8000"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClaimApiOnlineStoreStale
+        exp_alerts: []
+
+  # No 5xx at all: the error ratio is 0, not missing
+  - interval: 1m
+    input_series:
+      - series: 'claim_api_requests_total{endpoint="/predict", status="200"}'
+        values: '0+100x10'
+    promql_expr_test:
+      - expr: claim_api:error_ratio:rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'claim_api:error_ratio:rate5m'
+            value: 0
