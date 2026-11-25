@@ -7,7 +7,7 @@
 // adjuster note (both models run), half send only a policy_id (features
 // from the online store, triage model only).
 //
-// Thresholds are the service-level objectives in the README; k6 exits
+// Thresholds are the latency and error objectives in docs/slo.md; k6 exits
 // non-zero if one fails.
 import http from 'k6/http';
 import { check } from 'k6';
@@ -47,8 +47,10 @@ export const options = {
   },
   thresholds: {
     http_req_failed: ['rate<0.01'],
-    'http_req_duration{endpoint:policy}': ['p(95)<100', 'p(99)<250'],
-    'http_req_duration{endpoint:claim}': ['p(95)<300', 'p(99)<500'],
+    // The latency objectives in docs/slo.md: 99% within 100 ms (by policy)
+    // and 250 ms (full claim), plus a p95 guard well inside them.
+    'http_req_duration{endpoint:policy}': ['p(95)<50', 'p(99)<100'],
+    'http_req_duration{endpoint:claim}': ['p(95)<150', 'p(99)<250'],
     dropped_iterations: ['count<10'],
   },
 };

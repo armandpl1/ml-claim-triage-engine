@@ -1,0 +1,15 @@
+# dev: the working tree. `make k8s-deploy` builds the image from the
+# current code (tag: git commit, plus -dirty-<hash> if uncommitted) and
+# serves the @champion bundle. Reached through the gateway at dev.localhost.
+image:
+  repository: claim-triage-api
+  pullPolicy: Never          # built locally, loaded into kind
+replicaCount: 1
+autoscaling: {enabled: false}
+podDisruptionBudget: {enabled: false}
+service: {type: ClusterIP}
+route:
+  enabled: true
+  hostnames: [dev.localhost]
+models:
+  bundlePath: /mnt/claim-triage/repo/serving_bundle

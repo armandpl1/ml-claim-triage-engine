@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest k8s-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke deploy image-local canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest envs promote rollback-model rollback-release alerts-check k8s-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -188,49 +188,93 @@ IMAGE_DIFF_HASH = $(shell git diff HEAD -- $(IMAGE_SOURCES) | sha256sum | cut -c
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD -- $(IMAGE_SOURCES) || echo -dirty-$(IMAGE_DIFF_HASH))
 CHART := infra/k8s/chart
 
-k8s-image:  ## Build the API image and load it into the kind cluster (tag: the git commit)
+k8s-image:  ## Build the working tree's image and load it into kind (tag: the git commit)
 	docker build --quiet --tag claim-triage-api:$(IMAGE_TAG) .
 	kind load docker-image claim-triage-api:$(IMAGE_TAG) --name $(KIND_CLUSTER)
 
-k8s-deploy: k8s-image  ## Install or upgrade the stable API release: localhost:8080 direct, localhost:8090 via the gateway
-	helm upgrade --install claim-triage-api $(CHART) --reset-then-reuse-values \
-		--set image.tag=$(IMAGE_TAG) --set route.enabled=true --wait --timeout 3m
-	kubectl get pods -l app.kubernetes.io/name=claim-triage-api -o wide
+# Environments (infra/k8s/environments/), one namespace each:
+#   dev      the working tree (make k8s-deploy), the @champion bundle
+#   staging  a released image, the @staging models
+#   prod     a released image, the @prod models; autoscaled, canaries
+# Through the gateway (localhost:8090): dev.localhost, staging.localhost, and
+# prod for any other host; localhost:8080 goes straight to prod's service.
+ENV ?= dev
+RELEASE_REPO := ghcr.io/armandpl1/claim-triage-api
+env_host = $(if $(filter prod,$(1)),localhost,$(1).localhost)
 
-k8s-smoke:  ## Smoke-test the API in the cluster: health, a full claim, a claim by policy_id
-	curl -fsS localhost:8080/health && echo
-	curl -fsS localhost:8080/predict -H 'content-type: application/json' -d @infra/k8s/smoke_claim.json && echo
-	curl -fsS localhost:8080/predict/policy -H 'content-type: application/json' -d '{"policy_id": 1}' && echo
-	curl -fsS localhost:8090/health && echo
+k8s-deploy: k8s-image  ## Deploy the working tree to dev (dev.localhost through the gateway)
+	rev=$$(sha256sum serving_bundle/metadata.json | cut -c1-12); \
+	helm upgrade --install claim-triage-api $(CHART) --namespace dev --create-namespace \
+		--values infra/k8s/environments/dev.yaml --set image.tag=$(IMAGE_TAG) \
+		--set models.revision=$$rev --wait --timeout 3m
+	kubectl get pods -n dev -o wide
 
-# Canary release: the @challenger triage model on one pod, WEIGHT percent of
-# requests through the gateway. Promote only what the gate already made
-# @champion (src/serving/canary.py); otherwise roll back.
+deploy:  ## Deploy an environment's pinned image and its models: make deploy ENV=staging|prod
+	@case "$(ENV)" in staging|prod) ;; *) echo "ENV must be staging or prod (dev: make k8s-deploy)"; exit 1;; esac
+	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.model_store \
+		--alias $(ENV) --notes-alias $(ENV) --out serving_bundle_$(ENV)
+	image=$$($(RUN) python -c "import yaml; i = yaml.safe_load(open('infra/k8s/environments/$(ENV).yaml'))['image']; print(i['repository'] + ':' + i['tag'])"); \
+	docker image inspect $$image >/dev/null 2>&1 || docker pull $$image || \
+		{ echo "$$image is not on GHCR (or not public) yet; to test before the release: make image-local VERSION=<tag>"; exit 1; }; \
+	[ -n "$$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' $$image)" ] || \
+		echo "WARNING: $$image is a local stand-in (make image-local), not the released image"; \
+	kind load docker-image $$image --name $(KIND_CLUSTER)
+	rev=$$(sha256sum serving_bundle_$(ENV)/metadata.json | cut -c1-12); \
+	helm upgrade --install claim-triage-api $(CHART) --namespace $(ENV) --create-namespace \
+		--values infra/k8s/environments/$(ENV).yaml --set models.revision=$$rev --wait --timeout 3m
+	kubectl get pods -n $(ENV) -o wide
+
+rollback-release:  ## Put an environment back on its previous Helm release (image and settings): make rollback-release ENV=prod
+	helm history claim-triage-api --namespace $(ENV) --max 5
+	helm rollback claim-triage-api --namespace $(ENV) --wait --timeout 3m
+	kubectl rollout status deployment/claim-triage-api-stable --namespace $(ENV) --timeout 3m
+
+image-local:  ## Stand-in for a release not yet on GHCR, built from the working tree: make image-local VERSION=1.0.0
+	@test -n "$(VERSION)" || { echo "VERSION is required"; exit 1; }
+	docker build --quiet --build-arg APP_VERSION=$(VERSION)+local --tag $(RELEASE_REPO):$(VERSION) .
+
+k8s-smoke:  ## Smoke-test an environment through the gateway: make k8s-smoke ENV=dev|staging|prod
+	curl -fsS -H 'Host: $(call env_host,$(ENV))' localhost:8090/health && echo
+	curl -fsS -H 'Host: $(call env_host,$(ENV))' localhost:8090/predict -H 'content-type: application/json' -d @infra/k8s/smoke_claim.json && echo
+	curl -fsS -H 'Host: $(call env_host,$(ENV))' localhost:8090/predict/policy -H 'content-type: application/json' -d '{"policy_id": 1}' && echo
+
+# Canary release in prod: the @staging models (the version about to go to
+# prod) on one pod with prod's image, WEIGHT percent of prod's requests.
+# Promoting it is `promote ENV=prod` then a prod deploy; it is refused if the
+# canary no longer serves @staging (src/serving/canary.py).
 WEIGHT ?= 10
 CANARY_BUNDLE := serving_bundle_canary
 
-canary-bundle:  ## Export the @challenger triage model (notes: @champion) into serving_bundle_canary/
-	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.model_store --alias challenger --out $(CANARY_BUNDLE)
+canary-bundle:  ## Export the @staging models into serving_bundle_canary/
+	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.model_store \
+		--alias staging --notes-alias staging --out $(CANARY_BUNDLE)
 
-canary-start: canary-bundle  ## Deploy the challenger as a canary with WEIGHT% of traffic (default 10)
-	helm upgrade --install claim-triage-api-canary $(CHART) --values infra/k8s/canary-values.yaml \
-		--set image.tag=$(IMAGE_TAG) --wait --timeout 3m
+canary-start: canary-bundle  ## Canary the @staging models in prod with WEIGHT% of prod's requests (default 10)
+	rev=$$(sha256sum $(CANARY_BUNDLE)/metadata.json | cut -c1-12); \
+	helm upgrade --install claim-triage-api-canary $(CHART) --namespace prod \
+		--values infra/k8s/environments/prod.yaml --values infra/k8s/canary-values.yaml \
+		--set models.revision=$$rev --wait --timeout 3m
 	$(MAKE) canary-weight WEIGHT=$(WEIGHT)
 
-canary-weight:  ## Send WEIGHT% of requests to the canary: make canary-weight WEIGHT=50
-	helm upgrade claim-triage-api $(CHART) --reuse-values --set route.canaryWeight=$(WEIGHT) --wait
-	kubectl get httproute claim-triage-api -o jsonpath='{range .spec.rules[0].backendRefs[*]}{.name}={.weight} {end}' && echo
+canary-weight:  ## Send WEIGHT% of prod's requests to the canary: make canary-weight WEIGHT=50
+	helm upgrade claim-triage-api $(CHART) --namespace prod --reuse-values --set route.canaryWeight=$(WEIGHT) --wait
+	kubectl get httproute claim-triage-api -n prod -o jsonpath='{range .spec.rules[0].backendRefs[*]}{.name}={.weight} {end}' && echo
 
-canary-rollback:  ## All traffic back to stable, then remove the canary
+canary-rollback:  ## All of prod's traffic back to stable, then remove the canary
 	$(MAKE) canary-weight WEIGHT=0
-	helm uninstall claim-triage-api-canary --wait
+	helm uninstall claim-triage-api-canary --namespace prod --wait
 
-canary-promote:  ## Only if the canary's model is @champion: refresh the stable bundle, restart stable, remove the canary
+canary-promote:  ## Promote the canary's models to prod (must still be @staging), redeploy prod, remove the canary
 	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.canary --bundle $(CANARY_BUNDLE)
-	$(MAKE) bundle
-	kubectl rollout restart deployment/claim-triage-api-stable
-	kubectl rollout status deployment/claim-triage-api-stable --timeout 3m
-	$(MAKE) canary-rollback
+	$(MAKE) promote ENV=prod
+	$(MAKE) deploy ENV=prod
+	helm uninstall claim-triage-api-canary --namespace prod --wait
+
+PROMETHEUS_IMAGE := prom/prometheus:v3.5.0
+
+alerts-check:  ## Validate the SLO alert rules and run their unit tests (promtool)
+	docker run --rm -v "$(CURDIR)/monitoring:/m:ro" -w /m --entrypoint promtool $(PROMETHEUS_IMAGE) check rules alerts.yml
+	docker run --rm -v "$(CURDIR)/monitoring:/m:ro" -w /m --entrypoint promtool $(PROMETHEUS_IMAGE) test rules alerts_test.yml
 
 LOADTEST_DIR := reports/loadtest
 
@@ -240,6 +284,19 @@ loadtest:  ## k6 load test through the gateway, 10 -> 30 req/s (~5.5 min); resul
 	infra/k8s/watch_pods.sh $(LOADTEST_DIR)/pods.csv & echo $$! > .kind/watch.pid; \
 	cd infra/k8s && k6 run --quiet --summary-export ../../$(LOADTEST_DIR)/summary.json loadtest.js; \
 	status=$$?; kill $$(cat ../../.kind/watch.pid); exit $$status
+
+# Model promotion between environments (src/serving/environments.py):
+# gate -> @champion -> @staging -> @prod, each move reversible.
+ENVIRONMENTS := MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.environments
+
+envs:  ## Which model version each environment runs (registry aliases)
+	$(ENVIRONMENTS) status
+
+promote:  ## Promote models: make promote ENV=staging (from @champion) or ENV=prod (from @staging)
+	$(ENVIRONMENTS) promote $(ENV)
+
+rollback-model:  ## Put an environment's models back on their previous version: make rollback-model ENV=prod
+	$(ENVIRONMENTS) rollback $(ENV)
 
 k8s-down:  ## Delete the kind cluster (frees its RAM)
 	kind delete cluster --name $(KIND_CLUSTER)

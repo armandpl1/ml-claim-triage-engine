@@ -1,7 +1,11 @@
-# Prometheus scrape config: collect the API's /metrics every 5 seconds.
+# Prometheus scrape config: collect the API's /metrics every 5 seconds, and
+# evaluate the SLO recording and alert rules (alerts.yml, docs/slo.md).
 global:
   scrape_interval: 5s
   evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml
 
 scrape_configs:
   - job_name: claim-triage-api

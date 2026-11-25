@@ -2,6 +2,7 @@
 #
 #   lint (ruff, mypy) ──> test (unit, behavioral, integration) ──> docker (build + smoke)
 #   lint ──> helm (lint, render and scan the Kubernetes chart; not a required check)
+#   lint ──> alerts (promtool: the SLO alert rules and their unit tests)
 #   lint ──> storage (Terraform on an AWS emulator, then the MLflow server on
 #            Postgres + S3; not a required check)
 #
@@ -119,6 +120,14 @@ jobs:
       - name: Image size
         run: docker image ls claim-triage-api:ci
 
+      # Report only: a new CVE in the base image shouldn't fail unrelated PRs.
+      # The release workflow (release.yml) refuses to publish with one.
+      - name: Vulnerability report (Trivy, fixable HIGH and CRITICAL)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2 \
+            image --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 0 claim-triage-api:ci
+
   # infra/terraform applied to Moto (an AWS emulator, no account), checked,
   # then the MLflow server on Postgres + S3 smoke-tested end to end.
   storage:
@@ -201,13 +210,18 @@ jobs:
       - name: Lint
         run: helm lint --strict infra/k8s/chart
 
-      - name: Render the stable release (with a canary route) and the canary
+      - name: Render every environment, prod with a canary route, and the canary
         run: |
           mkdir -p rendered
-          helm template claim-triage-api infra/k8s/chart --set image.tag=ci \
-            --set route.enabled=true --set route.canaryWeight=10 > rendered/stable.yaml
-          helm template claim-triage-api-canary infra/k8s/chart --set image.tag=ci \
-            --values infra/k8s/canary-values.yaml > rendered/canary.yaml
+          for env in dev staging prod; do
+            helm lint --strict infra/k8s/chart --values "infra/k8s/environments/$env.yaml" --set image.tag=ci
+            helm template claim-triage-api infra/k8s/chart --namespace "$env" --set image.tag=ci \
+              --values "infra/k8s/environments/$env.yaml" > "rendered/$env.yaml"
+          done
+          helm template claim-triage-api infra/k8s/chart --namespace prod \
+            --values infra/k8s/environments/prod.yaml --set route.canaryWeight=10 > rendered/prod-canary-route.yaml
+          helm template claim-triage-api-canary infra/k8s/chart --namespace prod \
+            --values infra/k8s/environments/prod.yaml --values infra/k8s/canary-values.yaml > rendered/canary.yaml
 
       - name: Security scan (Trivy; deliberate exceptions in infra/k8s/trivyignore.yaml)
         run: |
@@ -221,3 +235,17 @@ jobs:
           name: helm-rendered
           path: rendered/
           retention-days: 14
+
+  alerts:
+    name: Alert rules (promtool check and unit tests)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate the rules and run their tests (same Prometheus as docker compose)
+        run: make alerts-check

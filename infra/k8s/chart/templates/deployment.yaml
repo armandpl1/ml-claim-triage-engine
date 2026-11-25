@@ -16,6 +16,10 @@ spec:
   template:
     metadata:
       labels: {{- include "api.labels" . | nindent 8 }}
+      {{- with .Values.models.revision }}
+      annotations:
+        checksum/models: {{ . | quote }}
+      {{- end }}
     spec:
       automountServiceAccountToken: false   # the API never calls Kubernetes
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
@@ -36,6 +40,7 @@ spec:
             - {name: INFERENCE_LOG_PATH, value: /data/inference/inference_log.db}
             - {name: ORT_THREADS, value: {{ .Values.ortThreads | quote }}}
             - {name: SERVING_TRACK, value: {{ .Values.track | quote }}}
+            - {name: SERVING_ENV, value: {{ .Values.environment | default .Release.Namespace | quote }}}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -1,10 +1,11 @@
-"""Guard for promoting a canary release (make canary-promote).
+"""Guard for promoting a canary release in prod (make canary-promote).
 
-The gate decides which model is the champion (src/evaluation/gate.py); a
-canary only checks a model online before it gets all the traffic. So a
-canary can be promoted only if its triage model is already @champion in the
-registry. Otherwise promotion would put a model in front of every claim that
-the gate never accepted.
+The canary serves the @staging models, the version about to go to prod
+(make canary-bundle). Promoting it moves @prod to @staging
+(src/serving/environments.py). Before that, the guard checks that the
+canary's triage model is still @staging: if staging moved on while the
+canary ran, the version promoted would differ from the one that was checked
+in prod, so promotion is refused.
 
 Usage:
     python -m src.serving.canary --bundle serving_bundle_canary
@@ -22,23 +23,25 @@ from src.common.logging import get_logger, log_event
 from src.serving import model_store
 
 logger = get_logger("serving.canary")
+SOURCE_ALIAS = "staging"
 
 
-def champion_version(name: str) -> str:
+def alias_version(name: str, alias: str = SOURCE_ALIAS) -> str:
     from mlflow import MlflowClient
 
-    return str(MlflowClient().get_model_version_by_alias(name, "champion").version)
+    return str(MlflowClient().get_model_version_by_alias(name, alias).version)
 
 
-def promotable(bundle: Path, champion: str) -> tuple[bool, str]:
-    """Whether the canary bundle's triage model is the registry's champion."""
+def promotable(bundle: Path, staging: str) -> tuple[bool, str]:
+    """Whether the canary bundle's triage model is still the registry's @staging."""
     tabular = json.loads((bundle / "metadata.json").read_text())["tabular"]
     version = str(tabular["version"])
-    if version == champion:
-        return True, f"canary serves v{version}, the @champion"
+    if version == staging:
+        return True, f"canary serves v{version}, still @staging"
     return False, (
-        f"canary serves v{version}, but @champion is v{champion}: the gate has not "
-        "promoted it. Roll back (make canary-rollback), or pass the gate first."
+        f"canary serves v{version}, but @staging is now v{staging}: the version that "
+        "ran in prod isn't the one that would be promoted. Roll back (make "
+        "canary-rollback) and canary the new @staging."
     )
 
 
@@ -46,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check a canary can be promoted")
     parser.add_argument("--bundle", type=Path, required=True)
     args = parser.parse_args(argv)
-    ok, reason = promotable(args.bundle, champion_version(model_store.TABULAR_MODEL))
+    ok, reason = promotable(args.bundle, alias_version(model_store.TABULAR_MODEL))
     log_event(
         logger,
         logging.INFO if ok else logging.ERROR,

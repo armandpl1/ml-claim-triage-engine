@@ -64,6 +64,10 @@ class ClaimPrediction(BaseModel):
 
 class Health(BaseModel):
     status: Literal["ok", "degraded"]
+    # Release of the running image (APP_VERSION, set when the image is built)
+    version: str = "dev"
+    # Environment this pod belongs to (SERVING_ENV: dev, staging, prod)
+    environment: str = "local"
     models: dict[str, str]
     source: str
     uptime_seconds: float

@@ -64,9 +64,15 @@ on every change.
   `make k8s-deploy` + `make loadtest` (thresholds must pass). Don't add a
   Trivy exception without a reason in `infra/k8s/trivyignore.yaml`. Stop
   other stacks first: the cluster needs about 2 GB of RAM.
-- **Release through a canary, promote through the gate.** `make
-  canary-promote` only succeeds for a model the gate already made
-  `@champion`; never bypass it.
+- **Promote models in order: gate, staging, prod.** `make promote ENV=prod`
+  only takes `@staging`; never set `@staging` or `@prod` by hand (except
+  in a drill, undone afterwards). Canary the `@staging` models in prod
+  before `make canary-promote`.
+- **Release images by tag and pull request.** Bump `version` in
+  `pyproject.toml`, merge, push the tag `vX.Y.Z`; then change the image tag
+  in `infra/k8s/environments/staging.yaml`, and prod's after staging ran it.
+- **Alert rules change with their tests:** `make alerts-check` must pass,
+  and a new alert needs a runbook in `docs/runbooks/`.
 - **After every promotion,** run `make fairness` and `make model-card`, and
   commit the regenerated `docs/model_card_tabular.md`.
 - **The drift detector has its own environment** (inline script metadata in
@@ -127,6 +133,9 @@ on every change.
 | `make k8s-up`, `make k8s-deploy`            | Local cluster (kind, metrics, gateway); build and install the API  |
 | `make canary-start`, `make canary-rollback` | Challenger on 10% of requests (`WEIGHT=`); back to stable          |
 | `make loadtest`                             | k6 through the gateway, 10 -> 30 req/s; `reports/loadtest/`        |
+| `make envs`, `make promote ENV=...`         | Model versions per environment; promote staging or prod            |
+| `make deploy ENV=...`, `make rollback-*`    | Deploy staging or prod; roll back models or the Helm release       |
+| `make alerts-check`                         | promtool: validate the SLO alert rules and run their unit tests    |
 | `make infra-up`, `make infra-check`         | Start the AWS emulator, apply Terraform, check buckets and roles   |
 | `make mlflow-up`, `make mlflow-check`       | MLflow on Postgres + S3 at localhost:5001, then smoke-test it      |
 | `make infra-down`                           | Stop the emulator and MLflow storage (their data is wiped)         |

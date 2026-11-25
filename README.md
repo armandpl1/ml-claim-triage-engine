@@ -19,6 +19,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 | Done    | Explainability, fairness and model card        |
 | Done    | Point-in-time feature store (DuckDB + SQLite)  |
 | Done    | Kubernetes: Helm, autoscaling, canary, k6      |
+| Done    | Releases, environments, SLOs, runbooks         |
 
 ## Quick start
 
@@ -493,11 +494,11 @@ The API runs on a local Kubernetes cluster (kind, one node), installed with a He
 ```bash
 make k8s-tools        # kind, kubectl, helm, k6: pinned, checksum-verified, into ~/.local/bin
 make k8s-up           # one-node cluster, metrics-server, Gateway API + Traefik (~1 min; 6 the first time)
-make k8s-deploy       # build the image, load it, install the chart: localhost:8080, or 8090 via the gateway
-make k8s-smoke        # health, a full claim, a claim by policy_id
-make canary-start     # the @challenger on one pod with 10% of requests (WEIGHT=...)
-make canary-rollback  # all traffic back to stable, then remove the canary
-make canary-promote   # only if the canary's model is already @champion
+make k8s-deploy       # build the working tree's image and deploy it to dev (see Releases and environments)
+make k8s-smoke ENV=dev  # health, a full claim, a claim by policy_id, through the gateway
+make canary-start     # in prod: the @staging models on one pod with 10% of requests (WEIGHT=...)
+make canary-rollback  # all of prod's traffic back to stable, then remove the canary
+make canary-promote   # promote the canary's models to prod, if they're still @staging
 make loadtest         # k6, 10 -> 30 req/s for 5.5 min; reports/loadtest/
 make k8s-down         # delete the cluster
 ```
@@ -511,12 +512,12 @@ make k8s-down         # delete the cluster
 | Autoscaling             | 2 to 4 pods at 70% CPU; up at once, down one pod per 30 s after 2 quiet minutes                         |
 | Rollouts                | Never below the replica count; a 5 s pause lets a stopping pod leave the Service before it gets SIGTERM |
 | Gateway API + Traefik   | Splits requests by weight between stable and canary; per request, unlike a Service (per connection)     |
-| `src/serving/canary.py` | Refuses to promote a canary whose model the gate hasn't made `@champion`                                |
+| `src/serving/canary.py` | Refuses to promote a canary that no longer serves `@staging`                                            |
 | CI job `helm`           | `helm lint --strict`, render both releases, Trivy scan (deliberate exceptions in `trivyignore.yaml`)    |
 
-**Canary releases.** The gate decides which model is the champion; a canary checks a model online before it gets all the traffic. The canary is a second release of the same chart: the `@challenger` triage model on one pod. Every response carries `x-serving-track`, so traffic can be counted per release.
+**Canary releases.** The gate decides which model is the champion; a canary checks a model online before it gets all the traffic. The canary is a second release of the same chart, on one pod. Every response carries `x-serving-track`, so traffic can be counted per release. Since the environments below, the canary runs in prod and serves `@staging`, the version about to go to prod.
 
-How it was verified (champion v1 as stable, the gate-rejected v2 as canary):
+How it was verified, when the canary still served `@challenger` (champion v1 as stable, the gate-rejected v2 as canary):
 - **Exact split:** at 10%, 1,000 requests went 900 to stable and 100 to the canary, with no failures. The canary routed 11% of its claims to senior adjusters, vs 7.6% on stable.
 - **Guarded promotion:** `make canary-promote` refused v2, because `@champion` is v1.
 - **Safe rollback:** rolling back from 50% during 20 req/s of traffic dropped 0 of 1,201 requests.
@@ -544,6 +545,54 @@ Limits:
 - **One node.** Autoscaling adds pods, not machines; all pods share the laptop's 4 cores (8 threads), and k6 runs on the same machine. The numbers show the system's behavior, not production capacity.
 - **Models and the online store come from the repository** through a read-only hostPath mount. In a real cluster they would come from object storage. A new bundle or materialization needs a rollout restart.
 - **No cluster monitoring stack.** kube-prometheus-stack needs over 1.5 GB; the API's `/metrics`, `kubectl top` and k6's report cover this step.
+
+## Releases, environments, SLOs and runbooks
+
+The last step from "it runs" to "it can be operated": versioned images, separate environments with a promotion path, written objectives with alerts, and drilled runbooks.
+
+**Images.** Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: the tag must match `pyproject.toml`'s version (1.0.0), then build, smoke test, Trivy scan, and push to `ghcr.io/armandpl1/claim-triage-api` as `X.Y.Z`, `X.Y` and `sha-<commit>`, with OCI labels. There is no `latest`: each environment names its exact version. The image is published only if Trivy finds no fixable HIGH or CRITICAL vulnerability. The first scan found three, in the Debian base and in the base Python's own setuptools (unused by the app); the runtime image now applies security updates and has no pip, setuptools or wheel. `/health` reports the version.
+
+**Environments,** one namespace each in the cluster (`infra/k8s/environments/`):
+
+| Environment | Image                                | Models      | Pods             | Reached at (gateway, `localhost:8090`)      |
+| ----------- | ------------------------------------ | ----------- | ---------------- | ------------------------------------------- |
+| dev         | the working tree (`make k8s-deploy`) | `@champion` | 1                | `Host: dev.localhost`                       |
+| staging     | pinned release tag                   | `@staging`  | 1                | `Host: staging.localhost`                   |
+| prod        | pinned release tag                   | `@prod`     | 2-4, autoscaled  | any other host; `localhost:8080` directly   |
+
+Two things are released, each its own way:
+- **Images by pull request.** An environment's values file pins its image tag; a release is a PR that changes it, staging first.
+- **Models through the registry.** The gate sets `@champion`; `make promote ENV=staging` copies it to `@staging`; `make promote ENV=prod` copies `@staging` to `@prod`, so prod only runs what staging ran. Each move keeps the replaced version as `@previous_<env>`. `make deploy ENV=...` exports the environment's bundle from its aliases; a hash of the bundle is a pod annotation, so new models restart the pods.
+
+```bash
+make envs                                 # which model version each environment runs
+make promote ENV=staging && make deploy ENV=staging
+make canary-start && make canary-promote  # the @staging models in prod at 10%, then all of prod
+make rollback-model ENV=prod              # models back; then make deploy ENV=prod
+make rollback-release ENV=prod            # image and settings back (previous Helm revision)
+make image-local VERSION=1.0.0            # a stand-in until the release exists on GHCR (deploy warns)
+```
+
+**Service-level objectives** ([docs/slo.md](docs/slo.md)): 99.5% of prediction requests without a 5xx; 99% of `/predict/policy` within 100 ms and of `/predict` within 250 ms; served features under 36 hours old; model quality from the delayed-label monitoring. `monitoring/alerts.yml` turns them into multiwindow budget-burn alerts (page at 14.4x, ticket at 6x) plus API down, dropped log rows and a stale store; `make alerts-check` runs promtool's unit tests, also in CI. The load test's thresholds are the SLOs: rerun against prod, `/predict/policy` p99 10.7 ms and `/predict` p99 75 ms, 0 of 6,180 failed.
+
+**Runbooks** ([docs/runbooks/](docs/runbooks/README.md)), each drilled in prod under live traffic:
+
+| Drill                                                    | Result                                                               |
+| -------------------------------------------------------- | -------------------------------------------------------------------- |
+| A release whose image crashes on startup                 | Old pods kept serving; `rollback-release` 5 s; 0 of 4,951 failed     |
+| A gate-rejected model forced through staging to prod     | `rollback-model` + `deploy` 64 s; 0 of 4,500 failed                  |
+| A 3-day-old online store (alert at 36 hours)             | Refreshed and restarted in 51 s                                      |
+| Overload at 50 req/s                                     | 4 pods, CPU still over target; `/predict` p99 837 ms; 0 failed       |
+
+What the drills and live checks found and fixed:
+- **The store's age was 5 hours wrong.** `materialize` wrote local time (EST) without a timezone; the pods, in UTC, read it as UTC, so the stale-store alert would fire 5 hours late. Times now carry their offset.
+- **The error ratio had no value when there were no errors,** instead of 0 (the 5xx series didn't exist yet), found against the live API. Fixed with `or vector(0)`.
+- **Model changes didn't restart the pods.** With the same image the pod spec didn't change, so pods kept the old models in memory; the bundle hash annotation fixes it.
+
+Limits:
+- **The 1.0.0 image isn't on GHCR yet:** it is published when the tag is pushed after this branch merges. The environments ran a local build of the same code under that tag (`/health` says `1.0.0+local`).
+- **One cluster for three environments.** Real staging and prod would be separate clusters or accounts; here they are namespaces on one node.
+- **Prometheus runs in docker compose, not in the cluster,** and nothing routes alerts to anyone (Alertmanager would). See [docs/slo.md](docs/slo.md).
 
 ## Running the heavy steps on a laptop
 
@@ -577,7 +626,9 @@ src/batch/                   nightly scoring, outcomes, delayed-label performanc
 src/infra/                   storage_check.py (S3 and IAM), mlflow_check.py (server smoke test)
 infra/terraform/             S3 buckets, KMS key, IAM roles (applied to Moto locally)
 infra/docker-compose.yml     Moto, Postgres and the MLflow server (infra/mlflow)
-infra/k8s/                   kind config, Helm chart, canary and Traefik values, k6 load test, tool installer
+infra/k8s/                   kind config, Helm chart, environments, canary and Traefik values, k6 load test
+docs/                        model card, service-level objectives (slo.md), runbooks/
+.github/workflows/           ci.yml (lint, tests, image, chart, alert rules), release.yml (images to GHCR)
 monitoring/                  drift detector, traffic simulator, Prometheus and Grafana config
 tests/                       unit/, behavioral/, integration/
 artifacts/                   metrics, gate decisions and benchmark (JSON); models live in MLflow

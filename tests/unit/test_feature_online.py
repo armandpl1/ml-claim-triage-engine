@@ -109,3 +109,15 @@ def test_in_memory_store_answers_like_the_file_and_survives_its_removal(registry
     registry.online.unlink()  # a re-materialization replaces the file
     assert in_memory.get(int(raw_policies["policy_id"].iloc[0])) is not None
     in_memory.close()
+
+
+def test_materialization_times_carry_their_utc_offset(registry):
+    as_of = datetime(2026, 1, 1, 12, 0)  # naive: the machine's local time
+    materialize.write_online(materialize.latest_versions(registry, as_of), registry.online, as_of)
+    store = OnlineStore(registry.online)
+    info = store.info()
+    store.close()
+    recorded = datetime.fromisoformat(info["as_of"])
+    assert recorded.tzinfo is not None  # readable the same way in any timezone
+    assert recorded.timestamp() == as_of.timestamp()
+    assert datetime.fromisoformat(info["materialized_at"]).tzinfo is not None

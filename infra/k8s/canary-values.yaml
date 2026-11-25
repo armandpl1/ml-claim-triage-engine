@@ -1,11 +1,14 @@
-# The canary release: the @challenger triage model (serving_bundle_canary/,
-# make canary-bundle) on one fixed pod behind a ClusterIP service. It gets
-# traffic only through the stable release's weighted route.
+# The canary release in prod, layered on environments/prod.yaml (same
+# image): the @staging models (serving_bundle_canary/, make canary-bundle),
+# the version about to go to prod, on one fixed pod behind a ClusterIP
+# service. It gets traffic only through the stable release's weighted route.
 track: canary
 replicaCount: 1
 autoscaling:
   enabled: false
 podDisruptionBudget:
+  enabled: false
+route:
   enabled: false
 service:
   type: ClusterIP

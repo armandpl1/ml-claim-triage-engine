@@ -83,7 +83,13 @@ def write_online(rows: pd.DataFrame, path: Path, as_of: datetime) -> None:
         con.execute(f"CREATE TABLE {META} (as_of TEXT, materialized_at TEXT, row_count INTEGER)")
         con.execute(
             f"INSERT INTO {META} VALUES (?, ?, ?)",
-            [as_of.isoformat(), datetime.now().isoformat(timespec="seconds"), len(data)],
+            # With the UTC offset: a naive local time read in a UTC pod made
+            # every age 5 hours wrong (step 7 stale-features drill).
+            [
+                as_of.astimezone().isoformat(),
+                datetime.now().astimezone().isoformat(timespec="seconds"),
+                len(data),
+            ],
         )
         con.commit()
     finally:
