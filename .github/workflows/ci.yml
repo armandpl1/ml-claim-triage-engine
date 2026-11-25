@@ -119,6 +119,14 @@ jobs:
       - name: Image size
         run: docker image ls claim-triage-api:ci
 
+      # Report only: a new CVE in the base image shouldn't fail unrelated PRs.
+      # The release workflow (release.yml) refuses to publish with one.
+      - name: Vulnerability report (Trivy, fixable HIGH and CRITICAL)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2 \
+            image --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 0 claim-triage-api:ci
+
   # infra/terraform applied to Moto (an AWS emulator, no account), checked,
   # then the MLflow server on Postgres + S3 smoke-tested end to end.
   storage:

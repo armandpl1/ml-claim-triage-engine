@@ -51,6 +51,8 @@ INFERENCE_LOG = Path(os.environ.get("INFERENCE_LOG_PATH", ROOT / "data/inference
 # Which release answered (stable or canary), set by the Helm chart; returned
 # in the x-serving-track header so traffic can be counted per track.
 TRACK = os.environ.get("SERVING_TRACK", "local")
+# The release this image was built for (Dockerfile ARG APP_VERSION); "dev" locally.
+APP_VERSION = os.environ.get("APP_VERSION", "dev")
 ONLINE_STORE = Path(os.environ.get("ONLINE_STORE_PATH", ROOT / "data/feature_store/online.db"))
 NUMERIC = ["exposure", "vehicle_power", "vehicle_age", "driver_age", "bonus_malus", "log_density"]
 CATEGORICAL = ["area", "vehicle_brand", "fuel_type", "region"]
@@ -100,7 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.inference_log.stop()  # write what is still queued
 
 
-app = FastAPI(title="Claim triage API", version="1.0", lifespan=lifespan)
+app = FastAPI(title="Claim triage API", version=APP_VERSION, lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -124,6 +126,7 @@ async def health(request: Request) -> Health:
     # probes and took busy pods out of service (step 6 load test).
     models: LoadedModels = request.app.state.models
     return Health(
+        version=APP_VERSION,
         status="ok" if models.notes else "degraded",
         models=models.versions,
         source=models.source,

@@ -2015,7 +2015,7 @@ wheels = [
 
 [[package]]
 name = "ml-claim-triage-engine"
-version = "0.1.0"
+version = "1.0.0"
 source = { virtual = "." }
 default-groups = ["dev", "orchestrate", "pipeline", "serve", "train"]
 dependencies = [

@@ -23,9 +23,20 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --locked --no-default-groups --group serve --no-install-project
 
 FROM python:3.11-slim AS runtime
+# Debian security fixes newer than the base image, then remove the system
+# Python's pip, setuptools and wheel: the app runs from /opt/venv, and the
+# copies vendored inside setuptools had known vulnerabilities (Trivy). Nothing
+# can be pip-installed into the running image.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall --yes --quiet setuptools wheel pip
 RUN useradd --create-home --uid 10001 app
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH=/opt/venv/bin:$PATH \
+# The release version, reported by /health (the release workflow sets it).
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION \
+    PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     INFERENCE_LOG_PATH=/data/inference/inference_log.db

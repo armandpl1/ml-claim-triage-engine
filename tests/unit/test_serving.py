@@ -179,17 +179,20 @@ def test_canary_bundle_exports_the_challenger_triage_model(monkeypatch, tmp_path
     assert meta["notes"]["version"] == "3"  # the notes model stays @champion
 
 
-def test_responses_name_the_serving_track(tmp_path, monkeypatch):
+def test_responses_name_the_track_and_release(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from src.serving import app as app_module
 
     monkeypatch.setattr(app_module, "TRACK", "canary")
+    monkeypatch.setattr(app_module, "APP_VERSION", "1.2.3")
     monkeypatch.setattr(app_module, "INFERENCE_LOG", tmp_path / "log.db")
     monkeypatch.setattr(app_module, "ONLINE_STORE", tmp_path / "none.db")
     monkeypatch.setattr(app_module, "load_models", _tiny_models)
     with TestClient(app_module.app) as client:
-        assert client.get("/health").headers["x-serving-track"] == "canary"
+        health = client.get("/health")
+        assert health.headers["x-serving-track"] == "canary"
+        assert health.json()["version"] == "1.2.3"
 
 
 def _tiny_models():
