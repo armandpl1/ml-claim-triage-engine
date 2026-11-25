@@ -3,8 +3,10 @@
 Loads the @champion triage model (from the MLflow registry when
 MLFLOW_TRACKING_URI is set, else from serving_bundle/, as the API does),
 computes the features with the same shared code as serving, and writes one
-prediction per claim to the batch store. Re-running a day replaces that
-day's predictions, so the job is idempotent.
+prediction per claim to the batch store, with its reason codes: the features
+that raised the claim's risk most (src.explain, TreeSHAP on the champion
+rebuilt as LightGBM). Re-running a day replaces that day's predictions and
+reasons, so the job is idempotent.
 
 Usage:
     python -m src.batch.score --date 2025-01-06
@@ -30,8 +32,12 @@ from src.batch.schedule import build_schedule
 from src.batch.store import connect
 from src.common.config import load_config, resolve
 from src.common.logging import get_logger, log_event
+from src.explain import reasons
+from src.explain.champion import Explainer, check_parity, load_explainer
 from src.features.row import log_density
+from src.features.transform import add_row_features
 from src.serving import model_store
+from src.training.tracking import train_config
 
 logger = get_logger("batch.score")
 
@@ -85,6 +91,25 @@ def score_frame(claims: pd.DataFrame, model: TabularModel, scored_at: datetime) 
     )
 
 
+def explain_frame(claims: pd.DataFrame, model: TabularModel, explainer: Explainer) -> pd.DataFrame:
+    """Reason codes for the claims, in the reasons table's column order.
+
+    Re-checks parity on these exact claims first: the reasons must describe
+    the model that routed them, or the night fails (ParityError).
+    """
+    data_cfg, explain_cfg = load_config(), train_config()["explain"]
+    rows = add_row_features(claims)
+    check_parity(explainer.pipeline, model.session, rows, data_cfg, explainer.tolerance)
+    codes = reasons.reason_codes(
+        rows,
+        reasons.contributions(explainer.pipeline, rows),
+        top_k=int(explain_cfg["top_k"]),
+        min_contribution=float(explain_cfg["min_contribution"]),
+    )
+    codes = codes.merge(claims[["claim_id", "report_date"]], on="claim_id")
+    return codes[["claim_id", "report_date", "rank", "feature", "value", "contribution"]]
+
+
 def claims_reported_on(day: date, cfg: dict[str, Any]) -> pd.DataFrame:
     claims = pd.read_parquet(resolve(cfg["batch"]["source"]))
     schedule = build_schedule(claims, cfg)
@@ -92,18 +117,34 @@ def claims_reported_on(day: date, cfg: dict[str, Any]) -> pd.DataFrame:
     return claims.merge(reported[["claim_id", "report_date"]], on="claim_id")
 
 
-def run(day: date, model: TabularModel | None = None, cfg: dict[str, Any] | None = None) -> int:
+def run(
+    day: date,
+    model: TabularModel | None = None,
+    cfg: dict[str, Any] | None = None,
+    explainer: Explainer | None = None,
+) -> int:
+    """Score one day. Without a model, loads @champion and its explainer; a
+    caller that passes a model gets reason codes only if it passes an
+    explainer too (tests and fakes have none)."""
     cfg = cfg or load_config("batch_config.yaml")
     claims = claims_reported_on(day, cfg)
-    model = model or load_champion()
+    if model is None:
+        model = load_champion()
+        explainer = explainer or load_explainer(model.session)
     rows = score_frame(claims, model, datetime.now())
+    # Computed before the transaction, so a parity failure writes nothing.
+    codes = explain_frame(claims, model, explainer) if explainer and len(claims) else None
     con = connect(resolve(cfg["batch"]["store"]))
     try:
         con.begin()
         con.execute("DELETE FROM predictions WHERE report_date = ?", [day])
+        con.execute("DELETE FROM reasons WHERE report_date = ?", [day])
         if len(rows):
             con.register("new_rows", rows)
             con.execute("INSERT INTO predictions SELECT * FROM new_rows")
+        if codes is not None and len(codes):
+            con.register("new_reasons", codes)
+            con.execute("INSERT INTO reasons SELECT * FROM new_reasons")
         con.execute(
             "INSERT INTO batch_runs VALUES ('score', ?, now(), ?, ?)",
             [day, len(rows), f"{model.name} v{model.version}"],
@@ -118,6 +159,7 @@ def run(day: date, model: TabularModel | None = None, cfg: dict[str, Any] | None
         report_date=day.isoformat(),
         claims=len(rows),
         senior_adjuster=int((rows["route"] == "senior_adjuster").sum()),
+        reason_codes=0 if codes is None else len(codes),
         model=f"{model.name} v{model.version}",
     )
     return len(rows)

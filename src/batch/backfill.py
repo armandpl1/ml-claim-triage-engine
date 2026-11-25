@@ -44,13 +44,14 @@ def run(scenario: str = "none", cfg: dict[str, Any] | None = None) -> dict[str, 
     cfg = cfg or load_config("batch_config.yaml")
     resolve(cfg["batch"]["store"]).unlink(missing_ok=True)
     model = score.load_champion()
+    explainer = score.load_explainer(model.session)  # rebuilt once, not every night
     first, last_report, last = nights(cfg)
 
     checks = []
     night = first
     while night <= last:
         if night <= last_report:
-            score.run(night, model, cfg)
+            score.run(night, model, cfg, explainer)
         labels.run(night, scenario, cfg)
         if night.weekday() == 0 or night == last:
             status = performance.run(night, model, cfg)

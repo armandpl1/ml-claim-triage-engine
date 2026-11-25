@@ -82,3 +82,38 @@ gate:
   bootstrap:
     tabular_min_lift: 1.5     # PR-AUC at least 1.5x the positive rate
     notes_min_macro_f1: 0.5
+
+explain:
+  # Reason codes for the tabular champion (src/explain/). The registry serves
+  # ONNX, which can't attribute a score to features, so the champion is
+  # rebuilt as LightGBM from its logged hyperparameters on the training split
+  # and must predict the same as the served ONNX model: the largest
+  # probability difference allowed on the claims being explained. A refit of
+  # champion v1 matched to 1.4e-7 (2026-11-24), so 1e-5 leaves room for
+  # float32 rounding but catches a different model.
+  parity_tolerance: 0.00001
+  # Reason codes: the features that pushed a claim's risk up the most
+  # (positive TreeSHAP contributions, in log-odds), at most top_k per claim.
+  # Contributions below min_contribution are left out as noise.
+  top_k: 3
+  min_contribution: 0.01
+
+fairness:
+  # Fairness audit of the tabular champion (src/evaluation/fairness.py) on
+  # the untouched test split, at the served decision threshold. The question
+  # is equal opportunity: do high-cost claims from every group reach a
+  # senior adjuster at the same rate? A group is flagged when its recall's
+  # Wilson interval lies entirely below the overall recall. Driver age and
+  # region are standard motor rating factors; this audits the routing
+  # outcome, not whether a factor may be used.
+  confidence: 0.95
+  # Groups with fewer high-cost claims are reported but not judged: their
+  # recall interval is too wide to mean anything. Regions below it are
+  # pooled into "other regions".
+  min_positives: 10
+  driver_age_bands:   # [lowest age, first age of the next band)
+    under 25: [16, 25]
+    25-39: [25, 40]
+    40-59: [40, 60]
+    60-69: [60, 70]
+    70+: [70, 101]

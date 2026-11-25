@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -79,6 +79,12 @@ push-data:  ## Store data versions in the DVC remote
 
 pull-data:  ## Restore data versions from the DVC remote
 	$(RUN) dvc pull
+
+fairness:  ## Fairness audit of the tabular champion by driver age and region: reports/fairness/
+	$(RUN) python -m src.evaluation.fairness
+
+model-card:  ## Regenerate docs/model_card_tabular.md from the served tabular champion
+	$(RUN) python -m src.evaluation.model_card
 
 batch-score:  ## Score the claims reported on one day: make batch-score DATE=2025-01-06
 	$(RUN) python -m src.batch.score --date $(DATE)

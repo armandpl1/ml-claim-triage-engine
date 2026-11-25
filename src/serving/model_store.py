@@ -62,10 +62,15 @@ def _download_champion(name: str, target: Path) -> dict[str, Any]:
     version = client.get_model_version_by_alias(name, "champion")
     target.mkdir(parents=True, exist_ok=True)
     local = Path(download_artifacts(artifact_uri=f"models:/{name}@champion", dst_path=str(target)))
+    # The training recipe (hyperparameters, monotone rules) travels with the
+    # model, so src/explain can rebuild it as LightGBM from the bundle alone.
+    params = client.get_run(version.run_id).data.params if version.run_id else {}
+    recipe = {k: v for k, v in params.items() if k.startswith("best_") or k == "monotone"}
     return {
         "version": str(version.version),
         "tags": dict(version.tags),
         "onnx": str(_onnx_file(local)),
+        "training": {"run_id": version.run_id, "params": recipe},
     }
 
 
@@ -105,6 +110,8 @@ def export_bundle(bundle_dir: Path = BUNDLE_DIR) -> dict[str, Any]:
             continue  # no notes champion yet: tabular-only bundle
         single_file_onnx(Path(info["onnx"]), staging / f"{key}.onnx")
         meta[key] = {"name": name, "version": info["version"], "tags": info["tags"]}
+        if info.get("training"):
+            meta[key]["training"] = info["training"]
     shutil.rmtree(downloads)
     shutil.copy(TOKENIZER_DIR / "tokenizer.json", staging / "tokenizer.json")
     (staging / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
