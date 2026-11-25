@@ -92,3 +92,8 @@ explain:
   # champion v1 matched to 1.4e-7 (2026-11-24), so 1e-5 leaves room for
   # float32 rounding but catches a different model.
   parity_tolerance: 0.00001
+  # Reason codes: the features that pushed a claim's risk up the most
+  # (positive TreeSHAP contributions, in log-odds), at most top_k per claim.
+  # Contributions below min_contribution are left out as noise.
+  top_k: 3
+  min_contribution: 0.01
