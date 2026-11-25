@@ -2,7 +2,11 @@
 
 Loads the @champion triage model (from the MLflow registry when
 MLFLOW_TRACKING_URI is set, else from serving_bundle/, as the API does),
-computes the features with the same shared code as serving, and writes one
+reads each claim's policy features from the offline feature store as they
+were on its report date (point-in-time: a policy renewed after the claim
+was reported is scored with its old values, so re-running a past night
+gives the same features), computes the model inputs with the same shared
+code as serving, and writes one
 prediction per claim to the batch store, with its reason codes: the features
 that raised the claim's risk most (src.explain, TreeSHAP on the champion
 rebuilt as LightGBM). Re-running a day replaces that day's predictions and
@@ -34,6 +38,8 @@ from src.common.config import load_config, resolve
 from src.common.logging import get_logger, log_event
 from src.explain import reasons
 from src.explain.champion import Explainer, check_parity, load_explainer
+from src.feature_store import offline
+from src.feature_store.registry import Registry, load_registry
 from src.features.row import log_density
 from src.features.transform import add_row_features
 from src.serving import model_store
@@ -110,11 +116,24 @@ def explain_frame(claims: pd.DataFrame, model: TabularModel, explainer: Explaine
     return codes[["claim_id", "report_date", "rank", "feature", "value", "contribution"]]
 
 
-def claims_reported_on(day: date, cfg: dict[str, Any]) -> pd.DataFrame:
+def claims_reported_on(
+    day: date, cfg: dict[str, Any], registry: Registry | None = None
+) -> pd.DataFrame:
+    """The claims reported on `day`, with their policy features as of that day."""
+    registry = registry or load_registry()
     claims = pd.read_parquet(resolve(cfg["batch"]["source"]))
     schedule = build_schedule(claims, cfg)
     reported = schedule[schedule["report_date"] == day]
-    return claims.merge(reported[["claim_id", "report_date"]], on="claim_id")
+    # The claim itself (ids, note); its policy's features come from the store.
+    arrived = claims.drop(columns=registry.view.fields).merge(
+        reported[["claim_id", "report_date"]], on="claim_id"
+    )
+    arrived["event_timestamp"] = pd.to_datetime(arrived["report_date"])
+    with offline.connect(registry) as con:
+        rows = offline.historical_features(con, arrived, registry)
+    # The join returns timestamps (and an untyped column on a night with no claims).
+    rows["report_date"] = pd.to_datetime(rows["report_date"]).dt.date
+    return rows.drop(columns="event_timestamp")
 
 
 def run(
