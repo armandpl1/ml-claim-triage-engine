@@ -18,6 +18,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 | Done    | Orchestration with Dagster                     |
 | Done    | Explainability, fairness and model card        |
 | Done    | Point-in-time feature store (DuckDB + SQLite)  |
+| Done    | Kubernetes: Helm, autoscaling, canary, k6      |
 
 ## Quick start
 
@@ -485,6 +486,65 @@ Limits:
 - **One entity, one snapshot.** No claim-history features (such as prior claims), because freMTPL2 has no claim dates. `claim_count` stays excluded: it counts later claims too.
 - **The online store is loaded by hand** (`make materialize`), not on a schedule, and a new load needs an API restart to be picked up.
 
+## Kubernetes: Helm, autoscaling, canary releases, load test
+
+The API runs on a local Kubernetes cluster (kind, one node), installed with a Helm chart, scaled by CPU, released by canary, and load-tested with k6. Everything fits a 7.6 GB laptop: the whole cluster uses 1.5 GB with 2 API pods, about 1.8 GB at the 4-pod peak.
+
+```bash
+make k8s-tools        # kind, kubectl, helm, k6: pinned, checksum-verified, into ~/.local/bin
+make k8s-up           # one-node cluster, metrics-server, Gateway API + Traefik (~1 min; 6 the first time)
+make k8s-deploy       # build the image, load it, install the chart: localhost:8080, or 8090 via the gateway
+make k8s-smoke        # health, a full claim, a claim by policy_id
+make canary-start     # the @challenger on one pod with 10% of requests (WEIGHT=...)
+make canary-rollback  # all traffic back to stable, then remove the canary
+make canary-promote   # only if the canary's model is already @champion
+make loadtest         # k6, 10 -> 30 req/s for 5.5 min; reports/loadtest/
+make k8s-down         # delete the cluster
+```
+
+| Piece                   | What it does                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `infra/k8s/chart`       | One release per track (stable, canary): Deployment, Service, HPA, PodDisruptionBudget, HTTPRoute        |
+| Probes                  | Startup, readiness and liveness on `/health`, with 2-3 s timeouts (a busy pod is slow, not dead)        |
+| Locked-down pods        | Non-root, read-only root filesystem, no privilege escalation, no capabilities, no service account token |
+| Resources               | Request 250m CPU and 320Mi from measured pods (179 MiB idle); no CPU limit, so bursts aren't throttled  |
+| Autoscaling             | 2 to 4 pods at 70% CPU; up at once, down one pod per 30 s after 2 quiet minutes                         |
+| Rollouts                | Never below the replica count; a 5 s pause lets a stopping pod leave the Service before it gets SIGTERM |
+| Gateway API + Traefik   | Splits requests by weight between stable and canary; per request, unlike a Service (per connection)     |
+| `src/serving/canary.py` | Refuses to promote a canary whose model the gate hasn't made `@champion`                                |
+| CI job `helm`           | `helm lint --strict`, render both releases, Trivy scan (deliberate exceptions in `trivyignore.yaml`)    |
+
+**Canary releases.** The gate decides which model is the champion; a canary checks a model online before it gets all the traffic. The canary is a second release of the same chart: the `@challenger` triage model on one pod. Every response carries `x-serving-track`, so traffic can be counted per release.
+
+How it was verified (champion v1 as stable, the gate-rejected v2 as canary):
+- **Exact split:** at 10%, 1,000 requests went 900 to stable and 100 to the canary, with no failures. The canary routed 11% of its claims to senior adjusters, vs 7.6% on stable.
+- **Guarded promotion:** `make canary-promote` refused v2, because `@champion` is v1.
+- **Safe rollback:** rolling back from 50% during 20 req/s of traffic dropped 0 of 1,201 requests.
+
+**Load test** (`infra/k8s/loadtest.js`). Requests arrive at a fixed rate whether or not the API keeps up, like real traffic: 10, then 20, then 30 per second, through the gateway. Half are full claims with an adjuster note (both models run), half are a `policy_id` alone (online store, triage model). The run fails if a threshold is crossed:
+
+| Measure                        | Threshold     | Result               |
+| ------------------------------ | ------------- | -------------------- |
+| Failed requests                | under 1%      | 0 of 6,179           |
+| Dropped arrivals               | under 10      | 0                    |
+| Full claim, p95 / p99          | 300 / 500 ms  | 61 / 75 ms           |
+| By policy_id, p95 / p99        | 100 / 250 ms  | 5.5 / 10.5 ms        |
+| Pods (autoscaler)              | 2 to 4        | 2 -> 3 -> 4          |
+
+The pods the autoscaler added took traffic (1,171 and 648 requests), because the gateway balances per request.
+
+What the load tests found and fixed (each with before and after numbers in its commit):
+- **The inference log lost rows and broke connections.** Each request wrote its own SQLite row. Under load, writers waited on the file lock past its timeout: one pod lost 1,349 rows, and the exceptions closed client connections (5.2% of requests failed). Now requests queue rows and one thread writes them in batches (`src/serving/inference_log.py`). The same load went from 5.2% to 0 failures, 26 to 44 req/s, and p95 from 1.02 s to 249 ms.
+- **Health checks timed out on busy pods.** `/health` waited in the same thread pool as predictions, so Kubernetes' 1 s probe timeout took busy pods out of service. It now runs on the event loop.
+- **Online-store lookups stalled on the disk.** `/predict/policy` had a worse tail than the endpoint that runs two models (p99 875 ms, max 2.2 s). A lookup whose page had left the OS cache waited on the laptop's spinning disk. The API now holds the store in memory (about 45 MB, like a Redis online store): p99 10.5 ms.
+- **New pods got no traffic through a Service.** A Service balances connections; the load test's keep-alive connections stayed on the first two pods. The gateway balances requests.
+- **An unchanged image tag means no rollout.** Builds from uncommitted code are tagged `-dirty-<hash of the diff>`.
+
+Limits:
+- **One node.** Autoscaling adds pods, not machines; all pods share the laptop's 4 cores (8 threads), and k6 runs on the same machine. The numbers show the system's behavior, not production capacity.
+- **Models and the online store come from the repository** through a read-only hostPath mount. In a real cluster they would come from object storage. A new bundle or materialization needs a rollout restart.
+- **No cluster monitoring stack.** kube-prometheus-stack needs over 1.5 GB; the API's `/metrics`, `kubectl top` and k6's report cover this step.
+
 ## Running the heavy steps on a laptop
 
 Fine-tuning and Optuna can use several GB of RAM. Running two at once got processes killed by the Linux out-of-memory daemon, including the desktop session. Run one heavy job at a time, ideally in a memory-capped scope:
@@ -517,6 +577,7 @@ src/batch/                   nightly scoring, outcomes, delayed-label performanc
 src/infra/                   storage_check.py (S3 and IAM), mlflow_check.py (server smoke test)
 infra/terraform/             S3 buckets, KMS key, IAM roles (applied to Moto locally)
 infra/docker-compose.yml     Moto, Postgres and the MLflow server (infra/mlflow)
+infra/k8s/                   kind config, Helm chart, canary and Traefik values, k6 load test, tool installer
 monitoring/                  drift detector, traffic simulator, Prometheus and Grafana config
 tests/                       unit/, behavioral/, integration/
 artifacts/                   metrics, gate decisions and benchmark (JSON); models live in MLflow
