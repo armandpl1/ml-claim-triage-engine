@@ -1,0 +1,27 @@
+# One-node kind cluster for the claim triage API (make k8s-up).
+#
+# One node, not three: a node costs ~0.7 GB of RAM, and this laptop has 7.6 GB.
+# __REPO__ is replaced with the repository's absolute path by make k8s-up.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: claim-triage
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.33.1   # kind v0.29.0's default node, same minor as kubectl
+    # The repository, read-only: the chart mounts the serving bundles and the
+    # online feature store from it into the pods (hostPath). The repository,
+    # not the bundle folders: `make bundle` swaps a bundle folder by renaming
+    # it, which would leave a mount of the folder itself pointing at the old one.
+    extraMounts:
+      - hostPath: __REPO__
+        containerPath: /mnt/claim-triage/repo
+        readOnly: true
+    # Host ports for the API: 8080 straight to the stable service (NodePort
+    # 30080), 8090 through the traffic splitter used for canary releases.
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: 127.0.0.1
+      - containerPort: 30090
+        hostPort: 8090
+        listenAddress: 127.0.0.1

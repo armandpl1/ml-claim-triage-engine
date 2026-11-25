@@ -131,13 +131,13 @@ def test_bundled_model_keeps_external_weights(tmp_path):
 
 
 def _fake_champions(monkeypatch, tmp_path, available: set[str]):
-    def download(name, target):
+    def download(name, target, alias="champion"):
         if name not in available:
             raise RuntimeError(f"no @champion for {name}")
         target.mkdir(parents=True, exist_ok=True)
         (target / "model.onnx").write_text(f"onnx of {name}")
         return {
-            "version": "3",
+            "version": "3" if alias == "champion" else "4",
             "tags": {"decision_threshold": "0.08"},
             "onnx": str(target / "model.onnx"),
         }
@@ -170,3 +170,36 @@ def test_a_failed_export_keeps_the_working_bundle(monkeypatch, tmp_path):
         model_store.export_bundle(bundle)
     assert (bundle / "tabular.onnx").read_text() == "the working model"
     assert not (tmp_path / "bundle.new").exists()
+
+
+def test_canary_bundle_exports_the_challenger_triage_model(monkeypatch, tmp_path):
+    _fake_champions(monkeypatch, tmp_path, {model_store.TABULAR_MODEL, model_store.NOTES_MODEL})
+    meta = model_store.export_bundle(tmp_path / "canary", tabular_alias="challenger")
+    assert meta["tabular"]["version"] == "4" and meta["tabular"]["alias"] == "challenger"
+    assert meta["notes"]["version"] == "3"  # the notes model stays @champion
+
+
+def test_responses_name_the_serving_track(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from src.serving import app as app_module
+
+    monkeypatch.setattr(app_module, "TRACK", "canary")
+    monkeypatch.setattr(app_module, "INFERENCE_LOG", tmp_path / "log.db")
+    monkeypatch.setattr(app_module, "ONLINE_STORE", tmp_path / "none.db")
+    monkeypatch.setattr(app_module, "load_models", _tiny_models)
+    with TestClient(app_module.app) as client:
+        assert client.get("/health").headers["x-serving-track"] == "canary"
+
+
+def _tiny_models():
+    import numpy as np
+
+    from src.serving.model_store import LoadedModels
+
+    class Session:
+        def run(self, _outputs, feeds):
+            p = np.full(len(feeds["driver_age"]), 0.1)
+            return [p > 0.5, np.column_stack([1 - p, p])]
+
+    return LoadedModels(Session(), 0.5, None, [], None, {"tabular": "1"}, "test")

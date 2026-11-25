@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "api.fullname" . }}
+  labels: {{- include "api.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: {{- include "api.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}   # never below the replica count
+  template:
+    metadata:
+      labels: {{- include "api.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false   # the API never calls Kubernetes
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001                     # the image's `app` user
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8000}
+          env:
+            - {name: SERVING_BUNDLE_DIR, value: /models}
+            - {name: ONLINE_STORE_PATH, value: /feature_store/online.db}
+            - {name: INFERENCE_LOG_PATH, value: /data/inference/inference_log.db}
+            - {name: ORT_THREADS, value: {{ .Values.ortThreads | quote }}}
+            - {name: SERVING_TRACK, value: {{ .Values.track | quote }}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .Values.preStopSleepSeconds }}"]
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            {{- toYaml .Values.probes.startup | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          volumeMounts:
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: feature-store, mountPath: /feature_store, readOnly: true}
+            - {name: inference-log, mountPath: /data/inference}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: models
+          hostPath: {path: {{ .Values.models.bundlePath }}, type: Directory}
+        - name: feature-store
+          hostPath: {path: {{ .Values.featureStore.path }}, type: Directory}
+        # Per-pod inference log; the drift detector reads the compose log, not this.
+        - name: inference-log
+          emptyDir: {sizeLimit: 100Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 50Mi}

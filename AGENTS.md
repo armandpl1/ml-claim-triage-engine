@@ -60,6 +60,13 @@ on every change.
   feature in `configs/feature_store.yaml` and `data_config.yaml` together;
   the registry refuses a mismatch. After `make materialize`, the skew check
   must pass.
+- **Kubernetes changes:** `helm lint --strict infra/k8s/chart` and a real
+  `make k8s-deploy` + `make loadtest` (thresholds must pass). Don't add a
+  Trivy exception without a reason in `infra/k8s/trivyignore.yaml`. Stop
+  other stacks first: the cluster needs about 2 GB of RAM.
+- **Release through a canary, promote through the gate.** `make
+  canary-promote` only succeeds for a model the gate already made
+  `@champion`; never bypass it.
 - **After every promotion,** run `make fairness` and `make model-card`, and
   commit the regenerated `docs/model_card_tabular.md`.
 - **The drift detector has its own environment** (inline script metadata in
@@ -117,6 +124,9 @@ on every change.
 | `make feature-store`, `make materialize`    | Rebuild the offline store; load the online store and check skew    |
 | `make orchestrate`                          | Dagster UI at localhost:3001: assets, jobs, schedule, sensors      |
 | `make retrain`, `make nightly DATE=...`     | Retrain (data, train, gate, bundle) or one batch night via Dagster |
+| `make k8s-up`, `make k8s-deploy`            | Local cluster (kind, metrics, gateway); build and install the API  |
+| `make canary-start`, `make canary-rollback` | Challenger on 10% of requests (`WEIGHT=`); back to stable          |
+| `make loadtest`                             | k6 through the gateway, 10 -> 30 req/s; `reports/loadtest/`        |
 | `make infra-up`, `make infra-check`         | Start the AWS emulator, apply Terraform, check buckets and roles   |
 | `make mlflow-up`, `make mlflow-check`       | MLflow on Postgres + S3 at localhost:5001, then smoke-test it      |
 | `make infra-down`                           | Stop the emulator and MLflow storage (their data is wiped)         |

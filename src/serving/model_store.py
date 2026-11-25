@@ -13,6 +13,7 @@ Only onnxruntime runs the models, so serving needs no training libraries.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -53,15 +54,16 @@ def _onnx_file(model_dir: Path) -> Path:
     return next(model_dir.rglob("*.onnx"))
 
 
-def _download_champion(name: str, target: Path) -> dict[str, Any]:
-    """Download @champion's ONNX artifact into target; return its version info."""
+def _download_champion(name: str, target: Path, alias: str = "champion") -> dict[str, Any]:
+    """Download the ONNX artifact of `name`@alias (default @champion) into
+    target; return its version info."""
     from mlflow import MlflowClient
     from mlflow.artifacts import download_artifacts
 
     client = MlflowClient()
-    version = client.get_model_version_by_alias(name, "champion")
+    version = client.get_model_version_by_alias(name, alias)
     target.mkdir(parents=True, exist_ok=True)
-    local = Path(download_artifacts(artifact_uri=f"models:/{name}@champion", dst_path=str(target)))
+    local = Path(download_artifacts(artifact_uri=f"models:/{name}@{alias}", dst_path=str(target)))
     # The training recipe (hyperparameters, monotone rules) travels with the
     # model, so src/explain can rebuild it as LightGBM from the bundle alone.
     params = client.get_run(version.run_id).data.params if version.run_id else {}
@@ -87,8 +89,11 @@ def single_file_onnx(source: Path, target: Path) -> None:
     onnx.save_model(model, str(target), save_as_external_data=False)
 
 
-def export_bundle(bundle_dir: Path = BUNDLE_DIR) -> dict[str, Any]:
+def export_bundle(bundle_dir: Path = BUNDLE_DIR, tabular_alias: str = "champion") -> dict[str, Any]:
     """Copy the @champion models and tokenizer from MLflow into a bundle folder.
+
+    `tabular_alias` picks another triage model, e.g. "challenger" for a
+    canary release (the notes model stays @champion).
 
     The new bundle is built next to the old one and swapped in only when
     complete, so a failed export (registry down, no champion) leaves the
@@ -102,7 +107,10 @@ def export_bundle(bundle_dir: Path = BUNDLE_DIR) -> dict[str, Any]:
     meta: dict[str, Any] = {}
     for key, name in (("tabular", TABULAR_MODEL), ("notes", NOTES_MODEL)):
         try:
-            info = _download_champion(name, downloads / key)
+            if key == "tabular" and tabular_alias != "champion":
+                info = _download_champion(name, downloads / key, tabular_alias)
+            else:
+                info = _download_champion(name, downloads / key)
         except Exception:
             if key == "tabular":
                 shutil.rmtree(staging, ignore_errors=True)
@@ -110,6 +118,8 @@ def export_bundle(bundle_dir: Path = BUNDLE_DIR) -> dict[str, Any]:
             continue  # no notes champion yet: tabular-only bundle
         single_file_onnx(Path(info["onnx"]), staging / f"{key}.onnx")
         meta[key] = {"name": name, "version": info["version"], "tags": info["tags"]}
+        if key == "tabular":
+            meta[key]["alias"] = tabular_alias
         if info.get("training"):
             meta[key]["training"] = info["training"]
     shutil.rmtree(downloads)
@@ -174,8 +184,12 @@ def load_models() -> LoadedModels:
     )
 
 
-def main() -> None:
-    meta = export_bundle()
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Export registry models into a serving bundle")
+    parser.add_argument("--alias", default="champion", help="triage model alias, e.g. challenger")
+    parser.add_argument("--out", type=Path, default=BUNDLE_DIR, help="bundle folder")
+    args = parser.parse_args(argv)
+    meta = export_bundle(args.out, args.alias)
     print(json.dumps({k: {"name": v["name"], "version": v["version"]} for k, v in meta.items()}))
 
 
