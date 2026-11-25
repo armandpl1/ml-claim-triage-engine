@@ -1,5 +1,11 @@
 """Build the leakage-free feature sets (pipeline stage `features`).
 
+The tabular features come from the feature store (src/feature_store/),
+read point-in-time: each claim gets the policy's features as they were at
+its event time. Training claims have no dates in the source; they read the
+source snapshot (history.recorded_at), the values the data was published
+with.
+
 Order matters, and is the point of this step:
     1. Split the validated claims into train / validation / test FIRST.
     2. Fit the preprocessor on the training split only (medians, category codes).
@@ -23,6 +29,8 @@ import pandas as pd
 
 from src.common.config import ROOT, load_config, resolve
 from src.common.logging import get_logger, log_event
+from src.feature_store import offline
+from src.feature_store.registry import load_registry
 from src.features.split import split_claims
 from src.features.text import load_tokenizer
 from src.features.transform import add_row_features, build_preprocessor, raw_input_columns
@@ -48,10 +56,22 @@ def leakage_report(df: pd.DataFrame, cfg: dict) -> dict:
     return report
 
 
-def run() -> dict:
-    cfg = load_config()
+def load_claims(cfg: dict) -> pd.DataFrame:
+    """Every validated claim, with its policy's features from the feature store."""
+    registry = load_registry(data_cfg=cfg)
     with duckdb.connect(str(resolve(cfg["paths"]["warehouse"])), read_only=True) as con:
         claims = con.sql("SELECT * FROM staging.claims ORDER BY claim_id").df()
+    columns = list(claims.columns)
+    entities = claims.drop(columns=registry.view.fields)
+    entities["event_timestamp"] = pd.Timestamp(registry.recorded_at)
+    with offline.connect(registry) as store:
+        joined = offline.historical_features(store, entities, registry)
+    return joined[columns]
+
+
+def run() -> dict:
+    cfg = load_config()
+    claims = load_claims(cfg)
 
     claims = add_row_features(claims)
     claims["split"] = split_claims(claims, cfg)  # 1. split first

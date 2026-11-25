@@ -31,6 +31,19 @@ class ClaimRequest(BaseModel):
     )
 
 
+class PolicyClaimRequest(BaseModel):
+    """A claim identified by its policy: the tabular features come from the
+    online feature store instead of the caller."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: int = Field(ge=1, description="Policy the claim is made on")
+    claim_id: str | None = Field(default=None, max_length=64, description="Caller's reference")
+    adjuster_note: str | None = Field(
+        default=None, min_length=3, max_length=2000, description="Free-text first notice of loss"
+    )
+
+
 class NotePrediction(BaseModel):
     category: str
     probabilities: dict[str, float]
@@ -45,6 +58,8 @@ class ClaimPrediction(BaseModel):
     note: NotePrediction | None
     model_versions: dict[str, str]
     latency_ms: float
+    # /predict/policy only: when the features read from the store took effect
+    feature_valid_from: str | None = None
 
 
 class Health(BaseModel):
@@ -52,3 +67,5 @@ class Health(BaseModel):
     models: dict[str, str]
     source: str
     uptime_seconds: float
+    # Online feature store: as_of, materialized_at, row_count (None if absent)
+    online_store: dict[str, str | int] | None = None

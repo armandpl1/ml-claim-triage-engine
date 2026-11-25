@@ -3,12 +3,16 @@ real code with a fake model, and the alert check reflects the report."""
 
 from __future__ import annotations
 
+import dataclasses
+
 import duckdb
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.batch import performance, score
+from src.feature_store import offline
+from src.feature_store.registry import load_registry
 from src.orchestration import batch as b
 from src.orchestration.definitions import defs
 
@@ -24,6 +28,7 @@ def settings(tmp_path, monkeypatch) -> b.BatchSettings:
     claims = pd.DataFrame(
         {
             "claim_id": [f"CLM-{i:07d}-01" for i in range(600)],
+            "policy_id": np.arange(1, 601, dtype="int64"),
             "exposure": 0.5,
             "vehicle_power": 6,
             "vehicle_age": 3,
@@ -40,6 +45,9 @@ def settings(tmp_path, monkeypatch) -> b.BatchSettings:
     )
     source = tmp_path / "claims.parquet"
     claims.to_parquet(source)
+    registry = dataclasses.replace(load_registry(), offline=tmp_path / "offline.duckdb")
+    offline.write(offline.build(claims, registry), registry.offline)
+    monkeypatch.setattr(score, "load_registry", lambda: registry)
     monkeypatch.setattr(
         score, "load_champion", lambda: score.TabularModel(FakeSession(), 0.08, "m", "1")
     )

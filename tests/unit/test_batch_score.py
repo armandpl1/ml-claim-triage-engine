@@ -131,3 +131,39 @@ def test_a_mismatched_explainer_fails_the_night_and_writes_nothing(
     with pytest.raises(champion.ParityError):
         score.run(date(2025, 1, 6), model, {"batch": {"store": str(store)}}, wrong)
     assert not store.exists()
+
+
+def test_nights_read_features_as_of_the_report_date(raw_policies, tmp_path):
+    """A claim reported before its policy's renewal is scored with the old
+    values, one reported after it with the new ones."""
+    import dataclasses
+
+    from src.feature_store import offline
+    from src.feature_store.registry import load_registry
+
+    registry = dataclasses.replace(load_registry(), offline=tmp_path / "offline.duckdb")
+    versions = offline.build(raw_policies, registry)
+    offline.write(versions, registry.offline)
+    renewed = versions.groupby("policy_id")["valid_from"].max()
+    policy = int(renewed.index[0])
+    day = renewed[policy].date()
+
+    source = raw_policies.set_index("policy_id").loc[[policy]].reset_index()
+    claims = source.assign(claim_id="C1", is_high_cost=False, adjuster_note="hit a post")
+    source_path = tmp_path / "claims.parquet"
+    claims.to_parquet(source_path)
+    cfg = {"batch": {"source": str(source_path), "start_date": "2025-01-01", "days": 1}}
+    cfg["batch"].update({"label_delay_days": {"min": 1, "max": 1}, "high_cost_extra_delay_days": 0})
+
+    import datetime as dt
+
+    for report, age in [
+        (day - dt.timedelta(days=1), int(source["driver_age"].iloc[0])),
+        (day, int(source["driver_age"].iloc[0]) + 1),
+    ]:
+        cfg["batch"]["start_date"] = report.isoformat()
+        rows = score.claims_reported_on(report, cfg, registry)
+        assert len(rows) == 1
+        assert rows["driver_age"].iloc[0] == age
+        assert rows["report_date"].iloc[0] == report
+        assert rows["claim_id"].iloc[0] == "C1"

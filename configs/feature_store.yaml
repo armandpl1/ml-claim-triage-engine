@@ -1,0 +1,50 @@
+# Feature store (src/feature_store/): one definition of the tabular features,
+# used by training, batch scoring and the API.
+#
+#   offline  DuckDB, every version of every policy's features with the time
+#            it took effect; training sets and batch nights read it with a
+#            point-in-time (as-of) join, so a claim only sees what was known
+#            when it was reported
+#   online   SQLite, the latest version of each policy's features, for the
+#            API's millisecond lookups by policy_id
+#
+# The offline store is a DVC stage (it feeds training), so this file is a
+# dependency of the data pipeline: changing it rebuilds the store and the
+# training splits.
+
+feature_store:
+  offline: data/feature_store/offline.duckdb
+  online: data/feature_store/online.db
+  entity: policy_id
+
+  views:
+    policy_features:
+      source: staging.policies     # table in data/warehouse.duckdb
+      # Raw columns as stored. Must match the model's inputs
+      # (data_config.yaml features, before row derivations).
+      fields:
+        numeric: [exposure, vehicle_power, vehicle_age, driver_age, bonus_malus, density]
+        categorical: [area, vehicle_brand, fuel_type, region]
+      # Derived at read time from the stored fields, by the same shared code
+      # as serving (src/features/row.py), so they're never stored stale.
+      on_demand:
+        log_density: density
+
+  history:
+    # freMTPL2 is one snapshot per policy, with no dates. It is recorded as
+    # taking effect on this date, before every claim the pipeline scores,
+    # so training reads exactly the source values.
+    recorded_at: 2024-01-01
+    # Synthetic, labeled as such in the README: each policy renews once on
+    # a stable-hash day of the year after `first`. On renewal the vehicle
+    # and the driver are a year older, and a claim-free year lowers the
+    # bonus-malus by 5% (the French rule, coefficient x 0.95, floor 0.50).
+    # Renewals fall inside the batch period, so a claim reported before its
+    # policy's renewal must be scored with the old values: a plain join on
+    # the latest values would leak the future.
+    renewal:
+      first: 2025-01-01
+      days: 365
+      age_step: 1            # vehicle_age and driver_age, capped at 100
+      bonus_malus_factor: 0.95
+      bonus_malus_floor: 50

@@ -24,11 +24,13 @@ services:
       TOKENIZER_DIR: /app/artifacts/tokenizer
       MODEL_CACHE_DIR: /tmp/models
       INFERENCE_LOG_PATH: /data/inference/inference_log.db
+      ONLINE_STORE_PATH: /data/feature_store/online.db
     volumes:
       - ./mlflow.db:/mlflow/mlflow.db
       - ./mlartifacts:${PWD}/mlartifacts:ro
       - ./artifacts/tokenizer:/app/artifacts/tokenizer:ro
       - ./data/inference:/data/inference
+      - ./data/feature_store:/data/feature_store:ro
     ports:
       - "8000:8000"
     restart: unless-stopped

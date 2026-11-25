@@ -33,6 +33,7 @@ WORKDIR /app
 COPY src/__init__.py src/
 COPY src/common src/common
 COPY src/features/__init__.py src/features/row.py src/features/
+COPY src/feature_store/__init__.py src/feature_store/online.py src/feature_store/
 COPY src/serving src/serving
 COPY configs configs
 RUN mkdir -p /data/inference && chown -R app /data

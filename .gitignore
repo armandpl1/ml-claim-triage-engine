@@ -29,6 +29,10 @@ reports/
 infra/terraform/.terraform/
 infra/terraform/terraform.tfstate*
 
+# Online feature store, rebuilt from the offline store by make materialize
+data/feature_store/online.db
+data/feature_store/*.tmp
+
 # Batch scoring store (predictions, outcomes), rebuilt by make batch-backfill
 data/batch/
 
