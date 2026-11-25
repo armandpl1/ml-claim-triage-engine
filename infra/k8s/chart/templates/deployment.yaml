@@ -35,6 +35,7 @@ spec:
             - {name: ONLINE_STORE_PATH, value: /feature_store/online.db}
             - {name: INFERENCE_LOG_PATH, value: /data/inference/inference_log.db}
             - {name: ORT_THREADS, value: {{ .Values.ortThreads | quote }}}
+            - {name: SERVING_TRACK, value: {{ .Values.track | quote }}}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

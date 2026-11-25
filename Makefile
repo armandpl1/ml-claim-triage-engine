@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke k8s-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke canary-bundle canary-start canary-weight canary-rollback canary-promote k8s-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -158,11 +158,15 @@ clean:  ## Remove caches and CI outputs
 KIND_CLUSTER := claim-triage
 K8S_CONFIG := .kind/kind-config.yaml
 METRICS_SERVER_CHART := 3.12.2
+# Gateway API (the standard channel the Traefik chart's README names) and
+# Traefik as its implementation, for weighted canary routing
+GATEWAY_API_CRDS := https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.3/standard-install.yaml
+TRAEFIK_CHART := 42.3.2
 
 k8s-tools:  ## Install kind, kubectl, helm and k6 (pinned, checksum-verified) into ~/.local/bin
 	infra/k8s/install_tools.sh
 
-k8s-up:  ## Start the one-node kind cluster with metrics-server (for autoscaling)
+k8s-up:  ## Start the one-node kind cluster: metrics-server (autoscaling), Gateway API + Traefik (canary)
 	mkdir -p .kind
 	sed 's|__REPO__|$(CURDIR)|g' infra/k8s/kind-config.yaml.tmpl > $(K8S_CONFIG)
 	kind get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || kind create cluster --config $(K8S_CONFIG) --wait 120s
@@ -170,6 +174,10 @@ k8s-up:  ## Start the one-node kind cluster with metrics-server (for autoscaling
 		--repo https://kubernetes-sigs.github.io/metrics-server/ --version $(METRICS_SERVER_CHART) \
 		--namespace kube-system --set 'args={--kubelet-insecure-tls}' \
 		--set resources.requests.memory=40Mi --wait --timeout 3m
+	kubectl apply --server-side -f $(GATEWAY_API_CRDS) >/dev/null
+	helm upgrade --install traefik traefik --repo https://traefik.github.io/charts \
+		--version $(TRAEFIK_CHART) --namespace traefik --create-namespace \
+		--values infra/k8s/traefik-values.yaml --wait --timeout 3m
 	kubectl get nodes
 
 # The git commit; with uncommitted changes to the image's sources, plus
@@ -184,14 +192,45 @@ k8s-image:  ## Build the API image and load it into the kind cluster (tag: the g
 	docker build --quiet --tag claim-triage-api:$(IMAGE_TAG) .
 	kind load docker-image claim-triage-api:$(IMAGE_TAG) --name $(KIND_CLUSTER)
 
-k8s-deploy: k8s-image  ## Install or upgrade the stable API release in the cluster: http://localhost:8080
-	helm upgrade --install claim-triage-api $(CHART) --set image.tag=$(IMAGE_TAG) --wait --timeout 3m
+k8s-deploy: k8s-image  ## Install or upgrade the stable API release: localhost:8080 direct, localhost:8090 via the gateway
+	helm upgrade --install claim-triage-api $(CHART) --reset-then-reuse-values \
+		--set image.tag=$(IMAGE_TAG) --set route.enabled=true --wait --timeout 3m
 	kubectl get pods -l app.kubernetes.io/name=claim-triage-api -o wide
 
 k8s-smoke:  ## Smoke-test the API in the cluster: health, a full claim, a claim by policy_id
 	curl -fsS localhost:8080/health && echo
 	curl -fsS localhost:8080/predict -H 'content-type: application/json' -d @infra/k8s/smoke_claim.json && echo
 	curl -fsS localhost:8080/predict/policy -H 'content-type: application/json' -d '{"policy_id": 1}' && echo
+	curl -fsS localhost:8090/health && echo
+
+# Canary release: the @challenger triage model on one pod, WEIGHT percent of
+# requests through the gateway. Promote only what the gate already made
+# @champion (src/serving/canary.py); otherwise roll back.
+WEIGHT ?= 10
+CANARY_BUNDLE := serving_bundle_canary
+
+canary-bundle:  ## Export the @challenger triage model (notes: @champion) into serving_bundle_canary/
+	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.model_store --alias challenger --out $(CANARY_BUNDLE)
+
+canary-start: canary-bundle  ## Deploy the challenger as a canary with WEIGHT% of traffic (default 10)
+	helm upgrade --install claim-triage-api-canary $(CHART) --values infra/k8s/canary-values.yaml \
+		--set image.tag=$(IMAGE_TAG) --wait --timeout 3m
+	$(MAKE) canary-weight WEIGHT=$(WEIGHT)
+
+canary-weight:  ## Send WEIGHT% of requests to the canary: make canary-weight WEIGHT=50
+	helm upgrade claim-triage-api $(CHART) --reuse-values --set route.canaryWeight=$(WEIGHT) --wait
+	kubectl get httproute claim-triage-api -o jsonpath='{range .spec.rules[0].backendRefs[*]}{.name}={.weight} {end}' && echo
+
+canary-rollback:  ## All traffic back to stable, then remove the canary
+	$(MAKE) canary-weight WEIGHT=0
+	helm uninstall claim-triage-api-canary --wait
+
+canary-promote:  ## Only if the canary's model is @champion: refresh the stable bundle, restart stable, remove the canary
+	MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.canary --bundle $(CANARY_BUNDLE)
+	$(MAKE) bundle
+	kubectl rollout restart deployment/claim-triage-api-stable
+	kubectl rollout status deployment/claim-triage-api-stable --timeout 3m
+	$(MAKE) canary-rollback
 
 k8s-down:  ## Delete the kind cluster (frees its RAM)
 	kind delete cluster --name $(KIND_CLUSTER)

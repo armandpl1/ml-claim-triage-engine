@@ -8,18 +8,13 @@ name: claim-triage
 nodes:
   - role: control-plane
     image: kindest/node:v1.33.1   # kind v0.29.0's default node, same minor as kubectl
-    # Read-only model files and the online feature store, mounted into the
-    # node; the chart mounts them into the pods (hostPath). Models stay out
-    # of the image, as with docker compose.
+    # The repository, read-only: the chart mounts the serving bundles and the
+    # online feature store from it into the pods (hostPath). The repository,
+    # not the bundle folders: `make bundle` swaps a bundle folder by renaming
+    # it, which would leave a mount of the folder itself pointing at the old one.
     extraMounts:
-      - hostPath: __REPO__/serving_bundle
-        containerPath: /mnt/claim-triage/serving_bundle
-        readOnly: true
-      - hostPath: __REPO__/artifacts/tokenizer
-        containerPath: /mnt/claim-triage/tokenizer
-        readOnly: true
-      - hostPath: __REPO__/data/feature_store
-        containerPath: /mnt/claim-triage/feature_store
+      - hostPath: __REPO__
+        containerPath: /mnt/claim-triage/repo
         readOnly: true
     # Host ports for the API: 8080 straight to the stable service (NodePort
     # 30080), 8090 through the traffic splitter used for canary releases.

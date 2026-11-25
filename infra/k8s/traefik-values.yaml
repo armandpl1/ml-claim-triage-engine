@@ -1,0 +1,24 @@
+# Traefik as the Gateway API implementation (chart 42.3.2, Traefik v3.7.17).
+# Only the Gateway API provider: no Ingress, no Traefik CRD routes.
+providers:
+  kubernetesCRD: {enabled: false}
+  kubernetesIngress: {enabled: false}
+  kubernetesGateway: {enabled: true}
+gateway:
+  listeners:
+    web:
+      port: 8000
+      namespacePolicy: {from: All}   # routes live in the app's namespace
+service:
+  spec:
+    type: NodePort
+ports:
+  web:
+    nodePort: 30090                  # host port 8090 (kind extraPortMappings)
+  websecure:
+    expose: {default: false}
+resources:
+  requests: {cpu: 100m, memory: 64Mi}
+  limits: {memory: 256Mi}
+log:
+  level: WARN

@@ -1,0 +1,13 @@
+# The canary release: the @challenger triage model (serving_bundle_canary/,
+# make canary-bundle) on one fixed pod behind a ClusterIP service. It gets
+# traffic only through the stable release's weighted route.
+track: canary
+replicaCount: 1
+autoscaling:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+service:
+  type: ClusterIP
+models:
+  bundlePath: /mnt/claim-triage/repo/serving_bundle_canary

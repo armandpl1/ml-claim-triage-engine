@@ -32,9 +32,9 @@ podDisruptionBudget:
 # Model files and the online feature store, on the kind node (extraMounts in
 # infra/k8s/kind-config.yaml.tmpl), mounted read-only into every pod.
 models:
-  bundlePath: /mnt/claim-triage/serving_bundle
+  bundlePath: /mnt/claim-triage/repo/serving_bundle
 featureStore:
-  path: /mnt/claim-triage/feature_store
+  path: /mnt/claim-triage/repo/data/feature_store
 
 # ONNX Runtime threads per pod. 1 so that scaling adds pods, not threads
 # fighting over the same cores.
@@ -49,6 +49,13 @@ resources:
     memory: 256Mi
   limits:
     memory: 512Mi
+
+# Route through the Gateway (host port 8090), stable release only. During a
+# canary release, canaryWeight percent of requests go to the canary.
+route:
+  enabled: false
+  gateway: {name: traefik-gateway, namespace: traefik}
+  canaryWeight: 0
 
 service:
   type: NodePort

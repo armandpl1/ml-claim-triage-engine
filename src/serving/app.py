@@ -48,6 +48,9 @@ from src.serving.schemas import (
 )
 
 INFERENCE_LOG = Path(os.environ.get("INFERENCE_LOG_PATH", ROOT / "data/inference/inference_log.db"))
+# Which release answered (stable or canary), set by the Helm chart; returned
+# in the x-serving-track header so traffic can be counted per track.
+TRACK = os.environ.get("SERVING_TRACK", "local")
 ONLINE_STORE = Path(os.environ.get("ONLINE_STORE_PATH", ROOT / "data/feature_store/online.db"))
 NUMERIC = ["exposure", "vehicle_power", "vehicle_age", "driver_age", "bonus_malus", "log_density"]
 CATEGORICAL = ["area", "vehicle_brand", "fuel_type", "region"]
@@ -105,6 +108,7 @@ async def record_metrics(
 ) -> Response:
     started = time.perf_counter()
     response = await call_next(request)
+    response.headers["x-serving-track"] = TRACK
     endpoint = request.url.path
     if endpoint != "/metrics":
         REQUESTS.labels(endpoint=endpoint, status=str(response.status_code)).inc()

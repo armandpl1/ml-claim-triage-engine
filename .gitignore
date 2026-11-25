@@ -41,3 +41,6 @@ data/batch/
 
 # kind cluster config, generated from infra/k8s/kind-config.yaml.tmpl by make k8s-up
 .kind/
+
+# Canary bundle (make canary-bundle): the @challenger, exported from MLflow
+serving_bundle_canary/
