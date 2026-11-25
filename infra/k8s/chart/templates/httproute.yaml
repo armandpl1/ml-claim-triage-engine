@@ -11,6 +11,9 @@ metadata:
   name: {{ include "api.name" . }}
   labels: {{- include "api.labels" . | nindent 4 }}
 spec:
+  {{- with .Values.route.hostnames }}
+  hostnames: {{- toYaml . | nindent 4 }}
+  {{- end }}
   parentRefs:
     - name: {{ .Values.route.gateway.name }}
       namespace: {{ .Values.route.gateway.namespace }}

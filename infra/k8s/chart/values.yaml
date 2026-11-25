@@ -2,6 +2,8 @@
 # during a release, `canary` (the challenger), from the same chart.
 
 track: stable
+# Which environment this release is (dev, staging, prod), reported by /health
+environment: ""
 
 image:
   repository: claim-triage-api
@@ -34,6 +36,10 @@ podDisruptionBudget:
 # infra/k8s/kind-config.yaml.tmpl), mounted read-only into every pod.
 models:
   bundlePath: /mnt/claim-triage/repo/serving_bundle
+  # A hash of the bundle's metadata.json, set by make deploy. Stored as a pod
+  # annotation, so new models restart the pods (otherwise the spec is
+  # unchanged and the pods keep the old models in memory).
+  revision: ""
 featureStore:
   path: /mnt/claim-triage/repo/data/feature_store
 
@@ -56,6 +62,8 @@ resources:
 # canary release, canaryWeight percent of requests go to the canary.
 route:
   enabled: false
+  # Hostnames this route answers; empty means any host (prod's default route).
+  hostnames: []
   gateway: {name: traefik-gateway, namespace: traefik}
   canaryWeight: 0
 

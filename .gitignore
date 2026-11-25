@@ -44,3 +44,5 @@ data/batch/
 
 # Canary bundle (make canary-bundle): the @challenger, exported from MLflow
 serving_bundle_canary/
+serving_bundle_staging/
+serving_bundle_prod/

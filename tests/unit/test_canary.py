@@ -1,4 +1,4 @@
-"""A canary is promotable only if the gate already made its model @champion."""
+"""A canary is promotable only while it still serves the registry's @staging."""
 
 from __future__ import annotations
 
@@ -18,18 +18,18 @@ def bundle(tmp_path):
     return make
 
 
-def test_the_champion_can_be_promoted(bundle):
-    ok, reason = canary.promotable(bundle("3"), champion="3")
+def test_the_staging_version_can_be_promoted(bundle):
+    ok, reason = canary.promotable(bundle("3"), staging="3")
     assert ok and "v3" in reason
 
 
-def test_a_model_the_gate_did_not_promote_is_refused(bundle):
-    ok, reason = canary.promotable(bundle("2"), champion="1")
+def test_staging_moved_on_while_the_canary_ran(bundle):
+    ok, reason = canary.promotable(bundle("3"), staging="4")
     assert not ok
-    assert "gate has not promoted" in reason
+    assert "@staging is now v4" in reason
 
 
 def test_cli_exits_non_zero_when_refused(bundle, monkeypatch):
-    monkeypatch.setattr(canary, "champion_version", lambda _name: "1")
-    assert canary.main(["--bundle", str(bundle("2"))]) == 1
-    assert canary.main(["--bundle", str(bundle("1"))]) == 0
+    monkeypatch.setattr(canary, "alias_version", lambda _name: "4")
+    assert canary.main(["--bundle", str(bundle("3"))]) == 1
+    assert canary.main(["--bundle", str(bundle("4"))]) == 0

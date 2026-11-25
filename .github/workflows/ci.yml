@@ -209,13 +209,18 @@ jobs:
       - name: Lint
         run: helm lint --strict infra/k8s/chart
 
-      - name: Render the stable release (with a canary route) and the canary
+      - name: Render every environment, prod with a canary route, and the canary
         run: |
           mkdir -p rendered
-          helm template claim-triage-api infra/k8s/chart --set image.tag=ci \
-            --set route.enabled=true --set route.canaryWeight=10 > rendered/stable.yaml
-          helm template claim-triage-api-canary infra/k8s/chart --set image.tag=ci \
-            --values infra/k8s/canary-values.yaml > rendered/canary.yaml
+          for env in dev staging prod; do
+            helm lint --strict infra/k8s/chart --values "infra/k8s/environments/$env.yaml" --set image.tag=ci
+            helm template claim-triage-api infra/k8s/chart --namespace "$env" --set image.tag=ci \
+              --values "infra/k8s/environments/$env.yaml" > "rendered/$env.yaml"
+          done
+          helm template claim-triage-api infra/k8s/chart --namespace prod \
+            --values infra/k8s/environments/prod.yaml --set route.canaryWeight=10 > rendered/prod-canary-route.yaml
+          helm template claim-triage-api-canary infra/k8s/chart --namespace prod \
+            --values infra/k8s/environments/prod.yaml --values infra/k8s/canary-values.yaml > rendered/canary.yaml
 
       - name: Security scan (Trivy; deliberate exceptions in infra/k8s/trivyignore.yaml)
         run: |

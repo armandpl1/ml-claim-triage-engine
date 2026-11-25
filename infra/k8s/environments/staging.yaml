@@ -1,0 +1,17 @@
+# staging: a released image and the @staging models (make promote
+# ENV=staging). One pod. Reached through the gateway at staging.localhost.
+#
+# To release a new image to staging, change `tag` in a pull request.
+image:
+  repository: ghcr.io/armandpl1/claim-triage-api
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+replicaCount: 1
+autoscaling: {enabled: false}
+podDisruptionBudget: {enabled: false}
+service: {type: ClusterIP}
+route:
+  enabled: true
+  hostnames: [staging.localhost]
+models:
+  bundlePath: /mnt/claim-triage/repo/serving_bundle_staging

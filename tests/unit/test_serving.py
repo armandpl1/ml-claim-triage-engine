@@ -186,6 +186,7 @@ def test_responses_name_the_track_and_release(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_module, "TRACK", "canary")
     monkeypatch.setattr(app_module, "APP_VERSION", "1.2.3")
+    monkeypatch.setattr(app_module, "ENVIRONMENT", "staging")
     monkeypatch.setattr(app_module, "INFERENCE_LOG", tmp_path / "log.db")
     monkeypatch.setattr(app_module, "ONLINE_STORE", tmp_path / "none.db")
     monkeypatch.setattr(app_module, "load_models", _tiny_models)
@@ -193,6 +194,7 @@ def test_responses_name_the_track_and_release(tmp_path, monkeypatch):
         health = client.get("/health")
         assert health.headers["x-serving-track"] == "canary"
         assert health.json()["version"] == "1.2.3"
+        assert health.json()["environment"] == "staging"
 
 
 def _tiny_models():

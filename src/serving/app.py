@@ -53,6 +53,7 @@ INFERENCE_LOG = Path(os.environ.get("INFERENCE_LOG_PATH", ROOT / "data/inference
 TRACK = os.environ.get("SERVING_TRACK", "local")
 # The release this image was built for (Dockerfile ARG APP_VERSION); "dev" locally.
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
+ENVIRONMENT = os.environ.get("SERVING_ENV", "local")
 ONLINE_STORE = Path(os.environ.get("ONLINE_STORE_PATH", ROOT / "data/feature_store/online.db"))
 NUMERIC = ["exposure", "vehicle_power", "vehicle_age", "driver_age", "bonus_malus", "log_density"]
 CATEGORICAL = ["area", "vehicle_brand", "fuel_type", "region"]
@@ -127,6 +128,7 @@ async def health(request: Request) -> Health:
     models: LoadedModels = request.app.state.models
     return Health(
         version=APP_VERSION,
+        environment=ENVIRONMENT,
         status="ok" if models.notes else "degraded",
         models=models.versions,
         source=models.source,
