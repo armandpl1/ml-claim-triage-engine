@@ -16,6 +16,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 | Done    | Production storage: S3 (Terraform) + Postgres  |
 | Done    | Batch scoring and delayed-label monitoring     |
 | Done    | Orchestration with Dagster                     |
+| Done    | Explainability, fairness and model card        |
 
 ## Quick start
 
@@ -411,6 +412,38 @@ Limits, stated honestly:
 - **Retraining on the same data can't fix inflation.** The retrain job trains on the same training split. To learn the new costs, the training data has to include the newly settled claims, which is a data change, not a scheduling one. The sensor and the gate make the loop safe; they don't make it smart.
 - **The schedule runs on 2025 dates.** The simulation's nights are in 2025, so the schedule would find nothing to run today. Backfills over the partitions (in the UI) replay the period, like `make batch-backfill`.
 
+## Explainability, fairness and model card
+
+Every routed claim now says why, the routing is audited by driver age and region, and the champion has a model card generated from measured numbers: [docs/model_card_tabular.md](docs/model_card_tabular.md).
+
+```bash
+make batch-score DATE=2025-01-06   # predictions plus reason codes in data/batch/batch.duckdb
+make fairness                      # audit by driver age and region: reports/fairness/tabular.json
+make model-card                    # regenerate docs/model_card_tabular.md from the champion
+```
+
+**Reason codes from the served model.** The registry serves ONNX, which can't attribute a score to features. LightGBM can: TreeSHAP is built in (`pred_contrib`), so no new library is needed, and it splits each claim's score (log-odds) exactly into one contribution per feature. `src/explain/champion.py` rebuilds the champion as LightGBM from its logged recipe (hyperparameters, monotone rules, seed) on the training split, and then proves it is the same model: its probabilities must match the served ONNX within `explain.parity_tolerance` (1e-5). The check runs on the validation split at load and again on each night's claims before anything is written. A mismatch raises `ParityError`, because explaining a different model than the one that routed the claim would be worse than no explanation. The serving bundle now carries the recipe, so this works without the registry too.
+
+| Piece           | What it does                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| `src/explain/`  | Rebuild and parity check (`champion.py`); contributions, reason codes, global importance (`reasons.py`) |
+| `reasons` table | Each scored claim's top 3 features that raised its risk (above 0.01 log-odds), with the claim's value   |
+| Fairness audit  | Recall, routing rate, false-positive rate, precision and calibration per driver-age band and region     |
+| Model card      | Intended use, recipe, test performance, importance, fairness and limitations, all measured              |
+
+**Fairness rule.** The judged question is equal opportunity: do high-cost claims from every group reach a senior adjuster at the same rate? A group is flagged when its recall's 95% Wilson interval lies entirely below the overall recall. Groups with fewer than 10 high-cost claims are reported but not judged, and small regions are pooled. Driver age and region are standard motor rating factors; the audit checks the routing outcome, not whether a factor may be used. freMTPL2 has no gender or other protected attributes.
+
+How it was verified (champion v1, test split, 3,969 claims):
+- **Parity:** the rebuilt champion matched the served ONNX model to 1.46e-7 on 3,966 validation claims, from both the registry and the bundle. It was trained before the monotone rules, so its run logged none, and a rebuild with today's rules differed by 0.033: the check would have caught it.
+- **Exact attributions:** contributions summed back to each claim's probability to 1e-15. Reason codes for all 3,969 claims took 1.5 s.
+- **In the batch:** the full backfill took 2 min 8 s. 3,900 claims got reasons (10,688 rows) and every claim routed to a senior adjuster has at least one; the 69 without reasons had no feature raising their risk above the noise floor. The delayed-label performance checks were identical to before. One night through Dagster succeeded (71 claims, 192 reasons).
+- **Model card:** two builds were byte-identical; its PR-AUC (0.0774) matches the gate's measurement of this champion.
+
+Honest findings:
+- **Routing leans on one feature.** `exposure` (years the policy was in force) is the top reason for 232 of the 301 routed claims (77%). It is also the largest feature globally (mean contribution 0.32 log-odds, twice the next). A short exposure can mean a new customer, or a policy that ended early; the model can't tell which, so this is worth a business review before any rollout.
+- **No fairness alert, but little power.** Overall recall is only 17.9% (interval 13.1% to 24.1%), and with 184 high-cost test claims the group intervals are wide (under-25 drivers: 1.6% to 37.7%). No alert is not proof of equal treatment.
+- **Young drivers are over-routed.** Under-25 claims are routed at twice the average rate (15.4% vs 7.6%) with 2.2% precision, and the model overstates their risk by half (calibration 1.51). Equal opportunity doesn't flag this, because it looks at missed costly claims, not extra scrutiny. Region R93 is routed at 23.4%, with calibration 0.90.
+
 ## Running the heavy steps on a laptop
 
 Fine-tuning and Optuna can use several GB of RAM. Running two at once got processes killed by the Linux out-of-memory daemon, including the desktop session. Run one heavy job at a time, ideally in a memory-capped scope:
@@ -425,14 +458,16 @@ The notes ONNX evaluation runs in batches, so its memory stays flat.
 
 ```
 configs/data_config.yaml     sources, paths, contracts, features, tokenizer, monitoring
-configs/train_config.yaml    tuning, fine-tuning, export, latency budget, gate rules
+configs/train_config.yaml    tuning, fine-tuning, export, latency budget, gate, explain, fairness
 configs/batch_config.yaml    batch schedule, settlement delays, monitoring rules, scenario
 src/common/                  config loading, structured JSON logging
 src/ingestion/               fetch_data.py (download, clean, join, store), notes.py
 src/validation/              contracts.py (Pandera contracts, fail-fast alerts)
 src/features/                split, preprocessing, tokenizer, shared row features
 src/training/                tabular.py, nlp.py, onnx_export.py, benchmark.py, text_baseline.py
-src/evaluation/              scoring.py (scorecards), gate.py (champion vs challenger)
+src/evaluation/              scoring.py (scorecards), gate.py (champion vs challenger),
+                             fairness.py (audit), model_card.py (docs/model_card_tabular.md)
+src/explain/                 champion rebuilt as LightGBM (parity-checked), TreeSHAP reason codes
 src/serving/                 FastAPI app, schemas, model loading, tokenizer
 src/orchestration/           Dagster assets, jobs, schedule, sensors (dagster.yaml: run limits)
 src/batch/                   nightly scoring, outcomes, delayed-label performance, backfill

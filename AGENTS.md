@@ -50,6 +50,13 @@ on every change.
   several GB of RAM; two at once got the desktop session killed by the
   out-of-memory daemon. Run them in a capped scope:
   `systemd-run --user --scope -p MemoryMax=2500M -p MemorySwapMax=0 nice -n 19 <cmd>`.
+- **Explain the served model, not a look-alike.** Reason codes come from the
+  champion rebuilt as LightGBM (`src/explain/champion.py`), which must pass
+  the parity check against the served ONNX. Never loosen
+  `explain.parity_tolerance` to make a run pass: a failure means the data or
+  the recipe changed.
+- **After every promotion,** run `make fairness` and `make model-card`, and
+  commit the regenerated `docs/model_card_tabular.md`.
 - **The drift detector has its own environment** (inline script metadata in
   `monitoring/drift_detector.py`, locked in `drift_detector.py.lock`), because
   Evidently doesn't run on pandas 3. Change its pins with
@@ -100,6 +107,8 @@ on every change.
 | `make simulate`, `make drift`               | Send test traffic (`SHIFT=1` to drift it), then check drift        |
 | `make batch-score DATE=...`                 | Score one day's claims in the nightly batch job                    |
 | `make batch-backfill SCENARIO=...`          | Replay every night; delayed-label performance in `reports/batch/`  |
+| `make fairness`                             | Fairness audit by driver age and region; `reports/fairness/`       |
+| `make model-card`                           | Regenerate `docs/model_card_tabular.md` from the served champion   |
 | `make orchestrate`                          | Dagster UI at localhost:3001: assets, jobs, schedule, sensors      |
 | `make retrain`, `make nightly DATE=...`     | Retrain (data, train, gate, bundle) or one batch night via Dagster |
 | `make infra-up`, `make infra-check`         | Start the AWS emulator, apply Terraform, check buckets and roles   |
