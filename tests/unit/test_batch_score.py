@@ -7,11 +7,16 @@ from datetime import date, datetime
 
 import duckdb
 import numpy as np
+import onnxruntime as ort
 import pandas as pd
+import pytest
 
 from src.batch import score
+from src.explain import champion
+from src.features.transform import add_row_features
 from src.serving.app import tabular_feeds
 from src.serving.schemas import ClaimRequest
+from src.training.onnx_export import export_tabular
 
 CLAIM = {
     "exposure": 0.59,
@@ -78,3 +83,51 @@ def test_rerunning_a_day_replaces_it(tmp_path, monkeypatch):
     ).fetchall()
     assert per_day == [(date(2025, 1, 6), 2), (date(2025, 1, 7), 1)]
     assert con.execute("SELECT count(*) FROM batch_runs").fetchone() == (3,)
+
+
+@pytest.fixture
+def real_champion(claims, cfg):
+    """A small real model served as ONNX, and its LightGBM explainer."""
+    rows = add_row_features(claims)
+    recipe = champion.Recipe(
+        {"n_estimators": 40, "num_leaves": 15, "min_child_samples": 5}, {}, 0, "r"
+    )
+    pipe = champion.rebuild(recipe, rows, cfg)
+    session = ort.InferenceSession(export_tabular(pipe, cfg, opset=17).SerializeToString())
+    served = score.TabularModel(session, threshold=0.1, name="m", version="1")
+    return served, champion.Explainer(pipe, recipe, tolerance=1e-5)
+
+
+def test_a_night_writes_reason_codes_and_a_rerun_replaces_them(
+    real_champion, claims, tmp_path, monkeypatch
+):
+    model, explainer = real_champion
+    day = date(2025, 1, 6)
+    monkeypatch.setattr(score, "claims_reported_on", lambda d, cfg: claims.assign(report_date=d))
+    cfg = {"batch": {"store": str(tmp_path / "batch.duckdb")}}
+    for _ in range(2):
+        score.run(day, model, cfg, explainer)
+    con = duckdb.connect(cfg["batch"]["store"], read_only=True)
+    per_claim = con.execute(
+        "SELECT claim_id, max(rank), count(*) FROM reasons GROUP BY 1"
+    ).fetchall()
+    assert per_claim and all(top == n <= 3 for _, top, n in per_claim)
+    orphans = con.execute(
+        "SELECT count(*) FROM reasons r ANTI JOIN predictions p USING (claim_id)"
+    ).fetchone()
+    assert orphans == (0,)
+    assert con.execute("SELECT min(contribution) FROM reasons").fetchone()[0] >= 0.01
+
+
+def test_a_mismatched_explainer_fails_the_night_and_writes_nothing(
+    real_champion, claims, cfg, tmp_path, monkeypatch
+):
+    model, _ = real_champion
+    rows = add_row_features(claims)
+    other = champion.Recipe({"n_estimators": 5}, {}, 0, "other")
+    wrong = champion.Explainer(champion.rebuild(other, rows, cfg), other, tolerance=1e-5)
+    monkeypatch.setattr(score, "claims_reported_on", lambda d, c: claims.assign(report_date=d))
+    store = tmp_path / "batch.duckdb"
+    with pytest.raises(champion.ParityError):
+        score.run(date(2025, 1, 6), model, {"batch": {"store": str(store)}}, wrong)
+    assert not store.exists()

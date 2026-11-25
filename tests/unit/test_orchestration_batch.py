@@ -44,6 +44,7 @@ def settings(tmp_path, monkeypatch) -> b.BatchSettings:
         score, "load_champion", lambda: score.TabularModel(FakeSession(), 0.08, "m", "1")
     )
     monkeypatch.setattr(performance, "load_champion", score.load_champion)
+    monkeypatch.setattr(score, "load_explainer", lambda _session: None)  # fake model
     monkeypatch.setattr(
         performance,
         "baseline",
