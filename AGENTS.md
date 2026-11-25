@@ -55,6 +55,11 @@ on every change.
   the parity check against the served ONNX. Never loosen
   `explain.parity_tolerance` to make a run pass: a failure means the data or
   the recipe changed.
+- **Read tabular features through the feature store** (`src/feature_store/`),
+  point-in-time: never join a claim to a policy's latest values. Add a
+  feature in `configs/feature_store.yaml` and `data_config.yaml` together;
+  the registry refuses a mismatch. After `make materialize`, the skew check
+  must pass.
 - **After every promotion,** run `make fairness` and `make model-card`, and
   commit the regenerated `docs/model_card_tabular.md`.
 - **The drift detector has its own environment** (inline script metadata in
@@ -109,6 +114,7 @@ on every change.
 | `make batch-backfill SCENARIO=...`          | Replay every night; delayed-label performance in `reports/batch/`  |
 | `make fairness`                             | Fairness audit by driver age and region; `reports/fairness/`       |
 | `make model-card`                           | Regenerate `docs/model_card_tabular.md` from the served champion   |
+| `make feature-store`, `make materialize`    | Rebuild the offline store; load the online store and check skew    |
 | `make orchestrate`                          | Dagster UI at localhost:3001: assets, jobs, schedule, sensors      |
 | `make retrain`, `make nightly DATE=...`     | Retrain (data, train, gate, bundle) or one batch night via Dagster |
 | `make infra-up`, `make infra-check`         | Start the AWS emulator, apply Terraform, check buckets and roles   |

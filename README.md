@@ -17,6 +17,7 @@ Real-time insurance claim triage: predict a claim's cost and whether it needs a 
 | Done    | Batch scoring and delayed-label monitoring     |
 | Done    | Orchestration with Dagster                     |
 | Done    | Explainability, fairness and model card        |
+| Done    | Point-in-time feature store (DuckDB + SQLite)  |
 
 ## Quick start
 
@@ -224,11 +225,12 @@ The triage behavior tests train a small model on fixture data, so they always ru
 
 `src/serving/app.py`:
 
-| Endpoint        | Returns                                                                                      |
-| --------------- | -------------------------------------------------------------------------------------------- |
-| `GET /health`   | Model versions, where they were loaded from, uptime                                          |
-| `POST /predict` | High-cost probability and route (`senior_adjuster` or `standard`), plus the note's category  |
-| `GET /metrics`  | Prometheus metrics: requests by status, latency histogram, routes, note categories, versions |
+| Endpoint               | Returns                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| `GET /health`          | Model versions, where they were loaded from, uptime                                          |
+| `POST /predict`        | High-cost probability and route (`senior_adjuster` or `standard`), plus the note's category  |
+| `POST /predict/policy` | The same for a claim sent with only its `policy_id`: features from the online feature store  |
+| `GET /metrics`         | Prometheus metrics: requests by status, latency histogram, routes, note categories, versions |
 
 - **Input validation:** request limits mirror the data contracts. Out-of-range or unknown fields get a 422 naming each bad field.
 - **Models load once at startup,** from the MLflow registry (`@champion`) or from a bundle folder exported by `make bundle`. Only ONNX Runtime and the `tokenizers` library run them: no PyTorch, scikit-learn or pandas in the image.
@@ -345,7 +347,7 @@ The held-out test claims stand in for new claims. `configs/batch_config.yaml` sp
 
 | Job                        | What it does                                                                                   |
 | -------------------------- | ---------------------------------------------------------------------------------------------- |
-| `src/batch/score.py`       | Scores one day's claims with `@champion` (registry or bundle); idempotent per day              |
+| `src/batch/score.py`       | Scores one day's claims with `@champion`; features as of the report date; idempotent per day   |
 | `src/batch/labels.py`      | Loads every outcome known by a date; optional `inflation` scenario                             |
 | `src/batch/performance.py` | Joins predictions to outcomes in two-week cohorts and alerts on calibration, recall, precision |
 | `src/batch/backfill.py`    | Replays every night from an empty store; records when the first alert fired                    |
@@ -444,6 +446,45 @@ Honest findings:
 - **No fairness alert, but little power.** Overall recall is only 17.9% (interval 13.1% to 24.1%), and with 184 high-cost test claims the group intervals are wide (under-25 drivers: 1.6% to 37.7%). No alert is not proof of equal treatment.
 - **Young drivers are over-routed.** Under-25 claims are routed at twice the average rate (15.4% vs 7.6%) with 2.2% precision, and the model overstates their risk by half (calibration 1.51). Equal opportunity doesn't flag this, because it looks at missed costly claims, not extra scrutiny. Region R93 is routed at 23.4%, with calibration 0.90.
 
+## Point-in-time feature store
+
+Until now every claim carried its policy's features as one frozen copy. Real policies change: they renew, the driver gets older, the bonus-malus moves. A model has to be trained and scored on the values known *when the claim arrived*. Using today's values for an old claim leaks the future, and a re-run of a past night would no longer match the original one. The feature store keeps every version of each policy's features with the time it took effect, and every consumer reads through it.
+
+| Piece                                | What it does                                                                                                   |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `configs/feature_store.yaml`         | The one definition: entity `policy_id`, source table, stored fields, on-demand `log_density`, renewal settings |
+| `src/feature_store/registry.py`      | Loads it and fails fast if it disagrees with the model's inputs or stores an excluded column                   |
+| Offline store (`offline.py`, DuckDB) | Every version of every policy (1,356,026 rows, 21 MB); read with an ASOF join, so a row sees only the past     |
+| Online store (`online.py`, SQLite)   | Each policy's version in force now, by `policy_id`; standard library only, so the slim API image can read it   |
+| Skew check (`materialize.py`)        | After each load, all 678,013 policies online must equal the offline point-in-time read at the same time        |
+
+Who reads it:
+- **Training:** a new DVC stage, `feature_store`, runs before `features`, which reads each claim's features as of the source snapshot's date.
+- **Nightly batch:** each claim's features as of its report date.
+- **The API:** `POST /predict/policy` looks up the online store. The values pass the same contract checks as a hand-sent claim and are scored through the same code. The response says when the features took effect.
+
+```bash
+make feature-store                 # rebuild the offline store (also part of make data)
+make materialize                   # load the online store as of now, then check for skew
+make materialize AS_OF=2025-02-01  # as of a past date
+curl -s localhost:8000/predict/policy -H 'content-type: application/json' -d '{"policy_id": 1}'
+```
+
+**The renewals are synthetic.** freMTPL2 is one snapshot per policy, with no dates. The snapshot is recorded as taking effect on 2024-01-01. Each policy then renews once, on a stable-hash day in 2025: vehicle and driver one year older, and a claim-free bonus-malus drop of 5% (the French rule, coefficient x 0.95, floor 50). Renewals fall during the batch period, so point-in-time reads matter for real.
+
+**Why not Feast?** Feast 0.68 forces pandas 3 down to 2.3 for the whole project. DuckDB's ASOF join and SQLite give the same guarantees for one entity: one definition, point-in-time training sets and no train/serve skew. Feast would add a registry service, more entities and streaming sources, which this project doesn't need.
+
+How it was verified (real data, champion v1):
+- **Training didn't change.** After rewiring the `features` stage through the store, train, validation, test, the drift reference and the preprocessor were byte-identical to before (same md5). The champion needed no retrain.
+- **No skew:** materialized as of now (every policy renewed) and as of 2025-02-01 (59,609 renewed). All 678,013 policies matched the offline read both times. Loading took 20 s at 1.2 GB peak.
+- **Batch, point-in-time:** in the full backfill, 365 of 3,969 claims (9.2%) were reported after their policy renewed and got the new values. 10 routes changed (2 up, 8 down, mostly from the lower bonus-malus). The parity check held every night. Delayed-label monitoring was unchanged: no alert on normal data, and the inflation alert still fired on 2025-06-15.
+- **What a naive join would have done:** scoring the same claims with today's values would have used post-claim values for 3,588 claims and flipped 70 routes (senior-adjuster routes 295 → 273). That is the leak the as-of join prevents.
+- **API:** over 300 requests each against the champion bundle, in-handler latency was p50 0.36 ms by `policy_id` vs 0.37 ms with full features. The lookup costs almost nothing.
+
+Limits:
+- **One entity, one snapshot.** No claim-history features (such as prior claims), because freMTPL2 has no claim dates. `claim_count` stays excluded: it counts later claims too.
+- **The online store is loaded by hand** (`make materialize`), not on a schedule, and a new load needs an API restart to be picked up.
+
 ## Running the heavy steps on a laptop
 
 Fine-tuning and Optuna can use several GB of RAM. Running two at once got processes killed by the Linux out-of-memory daemon, including the desktop session. Run one heavy job at a time, ideally in a memory-capped scope:
@@ -460,6 +501,7 @@ The notes ONNX evaluation runs in batches, so its memory stays flat.
 configs/data_config.yaml     sources, paths, contracts, features, tokenizer, monitoring
 configs/train_config.yaml    tuning, fine-tuning, export, latency budget, gate, explain, fairness
 configs/batch_config.yaml    batch schedule, settlement delays, monitoring rules, scenario
+configs/feature_store.yaml   feature view, store paths, synthetic renewal history
 src/common/                  config loading, structured JSON logging
 src/ingestion/               fetch_data.py (download, clean, join, store), notes.py
 src/validation/              contracts.py (Pandera contracts, fail-fast alerts)
@@ -469,6 +511,7 @@ src/evaluation/              scoring.py (scorecards), gate.py (champion vs chall
                              fairness.py (audit), model_card.py (docs/model_card_tabular.md)
 src/explain/                 champion rebuilt as LightGBM (parity-checked), TreeSHAP reason codes
 src/serving/                 FastAPI app, schemas, model loading, tokenizer
+src/feature_store/           registry, offline store (DuckDB, as-of reads), online store (SQLite), skew check
 src/orchestration/           Dagster assets, jobs, schedule, sensors (dagster.yaml: run limits)
 src/batch/                   nightly scoring, outcomes, delayed-label performance, backfill
 src/infra/                   storage_check.py (S3 and IAM), mlflow_check.py (server smoke test)
