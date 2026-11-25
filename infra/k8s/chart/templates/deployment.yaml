@@ -4,7 +4,9 @@ metadata:
   name: {{ include "api.fullname" . }}
   labels: {{- include "api.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   revisionHistoryLimit: 3
   selector:
     matchLabels: {{- include "api.selectorLabels" . | nindent 6 }}
@@ -16,6 +18,7 @@ spec:
       labels: {{- include "api.labels" . | nindent 8 }}
     spec:
       automountServiceAccountToken: false   # the API never calls Kubernetes
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001                     # the image's `app` user
@@ -37,6 +40,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           resources: {{- toYaml .Values.resources | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .Values.preStopSleepSeconds }}"]
           startupProbe:
             httpGet: {path: /health, port: http}
             {{- toYaml .Values.probes.startup | nindent 12 }}

@@ -172,7 +172,12 @@ k8s-up:  ## Start the one-node kind cluster with metrics-server (for autoscaling
 		--set resources.requests.memory=40Mi --wait --timeout 3m
 	kubectl get nodes
 
-IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
+# The git commit; with uncommitted changes to the image's sources, plus
+# -dirty-<hash of the diff>, so every different build gets a different tag
+# (an unchanged tag means no rollout: Kubernetes sees nothing to update).
+IMAGE_SOURCES := src configs Dockerfile pyproject.toml uv.lock
+IMAGE_DIFF_HASH = $(shell git diff HEAD -- $(IMAGE_SOURCES) | sha256sum | cut -c1-8)
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD -- $(IMAGE_SOURCES) || echo -dirty-$(IMAGE_DIFF_HASH))
 CHART := infra/k8s/chart
 
 k8s-image:  ## Build the API image and load it into the kind cluster (tag: the git commit)

@@ -9,7 +9,25 @@ image:
   # Images are loaded into kind with `kind load docker-image`, never pulled.
   pullPolicy: Never
 
+# Used only when autoscaling is off (the canary runs one fixed pod).
 replicaCount: 2
+
+# CPU-based autoscaling (needs metrics-server: make k8s-up). Idle pods use
+# 6-12m CPU; 70% of the 250m request is 175m, so only real load scales.
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4          # 4 x 512Mi limit = 2 GB: the laptop's budget
+  targetCPUUtilizationPercentage: 70
+  # Scale up at once; scale down after 2 minutes of low load (default is 5),
+  # so a load test shows the whole cycle without flapping.
+  scaleDownStabilizationSeconds: 120
+
+# Keep at least one pod serving through voluntary disruptions (node drain,
+# cluster upgrade). Rolling updates already keep every replica (maxUnavailable 0).
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 # Model files and the online feature store, on the kind node (extraMounts in
 # infra/k8s/kind-config.yaml.tmpl), mounted read-only into every pod.
@@ -39,6 +57,13 @@ service:
 
 probes:
   # Startup: models load before the first request (a few seconds).
-  startup: {periodSeconds: 2, failureThreshold: 30}
-  readiness: {periodSeconds: 5, failureThreshold: 2}
-  liveness: {periodSeconds: 10, failureThreshold: 3}
+  startup: {periodSeconds: 2, failureThreshold: 30, timeoutSeconds: 2}
+  # Kubernetes' default timeout is 1 s. A busy pod is slow, not dead: give
+  # readiness 2 s, and restart only after 30 s of failed liveness checks.
+  readiness: {periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 2}
+  liveness: {periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 3}
+
+# On scale-down or rollout, wait before SIGTERM so the pod leaves the
+# Service's endpoints first; uvicorn then finishes in-flight requests.
+preStopSleepSeconds: 5
+terminationGracePeriodSeconds: 30
