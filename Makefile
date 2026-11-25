@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke k8s-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -171,6 +171,22 @@ k8s-up:  ## Start the one-node kind cluster with metrics-server (for autoscaling
 		--namespace kube-system --set 'args={--kubelet-insecure-tls}' \
 		--set resources.requests.memory=40Mi --wait --timeout 3m
 	kubectl get nodes
+
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
+CHART := infra/k8s/chart
+
+k8s-image:  ## Build the API image and load it into the kind cluster (tag: the git commit)
+	docker build --quiet --tag claim-triage-api:$(IMAGE_TAG) .
+	kind load docker-image claim-triage-api:$(IMAGE_TAG) --name $(KIND_CLUSTER)
+
+k8s-deploy: k8s-image  ## Install or upgrade the stable API release in the cluster: http://localhost:8080
+	helm upgrade --install claim-triage-api $(CHART) --set image.tag=$(IMAGE_TAG) --wait --timeout 3m
+	kubectl get pods -l app.kubernetes.io/name=claim-triage-api -o wide
+
+k8s-smoke:  ## Smoke-test the API in the cluster: health, a full claim, a claim by policy_id
+	curl -fsS localhost:8080/health && echo
+	curl -fsS localhost:8080/predict -H 'content-type: application/json' -d @infra/k8s/smoke_claim.json && echo
+	curl -fsS localhost:8080/predict/policy -H 'content-type: application/json' -d '{"policy_id": 1}' && echo
 
 k8s-down:  ## Delete the kind cluster (frees its RAM)
 	kind delete cluster --name $(KIND_CLUSTER)

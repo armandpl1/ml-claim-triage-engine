@@ -1,0 +1,44 @@
+# Claim triage API. One release per track: `stable` (the champion) and,
+# during a release, `canary` (the challenger), from the same chart.
+
+track: stable
+
+image:
+  repository: claim-triage-api
+  tag: latest
+  # Images are loaded into kind with `kind load docker-image`, never pulled.
+  pullPolicy: Never
+
+replicaCount: 2
+
+# Model files and the online feature store, on the kind node (extraMounts in
+# infra/k8s/kind-config.yaml.tmpl), mounted read-only into every pod.
+models:
+  bundlePath: /mnt/claim-triage/serving_bundle
+featureStore:
+  path: /mnt/claim-triage/feature_store
+
+# ONNX Runtime threads per pod. 1 so that scaling adds pods, not threads
+# fighting over the same cores.
+ortThreads: 1
+
+# Requests from a measured pod: 183 MB with both models after 50 requests.
+# No CPU limit: a limit throttles latency spikes; the request is what the
+# scheduler and the autoscaler use.
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+service:
+  type: NodePort
+  port: 8000
+  nodePort: 30080   # host port 8080 (kind extraPortMappings)
+
+probes:
+  # Startup: models load before the first request (a few seconds).
+  startup: {periodSeconds: 2, failureThreshold: 30}
+  readiness: {periodSeconds: 5, failureThreshold: 2}
+  liveness: {periodSeconds: 10, failureThreshold: 3}

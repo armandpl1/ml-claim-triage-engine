@@ -1,0 +1,6 @@
+apiVersion: v2
+name: claim-triage-api
+description: Claim triage API (FastAPI + ONNX Runtime), one release per track (stable, canary)
+type: application
+version: 0.1.0
+appVersion: "1.0"
