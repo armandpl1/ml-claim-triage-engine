@@ -89,11 +89,14 @@ def single_file_onnx(source: Path, target: Path) -> None:
     onnx.save_model(model, str(target), save_as_external_data=False)
 
 
-def export_bundle(bundle_dir: Path = BUNDLE_DIR, tabular_alias: str = "champion") -> dict[str, Any]:
+def export_bundle(
+    bundle_dir: Path = BUNDLE_DIR, tabular_alias: str = "champion", notes_alias: str = "champion"
+) -> dict[str, Any]:
     """Copy the @champion models and tokenizer from MLflow into a bundle folder.
 
     `tabular_alias` picks another triage model, e.g. "challenger" for a
-    canary release (the notes model stays @champion).
+    canary release (the notes model stays @champion); an environment's
+    bundle sets both aliases, e.g. "prod" (src/serving/environments.py).
 
     The new bundle is built next to the old one and swapped in only when
     complete, so a failed export (registry down, no champion) leaves the
@@ -107,8 +110,9 @@ def export_bundle(bundle_dir: Path = BUNDLE_DIR, tabular_alias: str = "champion"
     meta: dict[str, Any] = {}
     for key, name in (("tabular", TABULAR_MODEL), ("notes", NOTES_MODEL)):
         try:
-            if key == "tabular" and tabular_alias != "champion":
-                info = _download_champion(name, downloads / key, tabular_alias)
+            alias = tabular_alias if key == "tabular" else notes_alias
+            if alias != "champion":
+                info = _download_champion(name, downloads / key, alias)
             else:
                 info = _download_champion(name, downloads / key)
         except Exception:
@@ -118,8 +122,7 @@ def export_bundle(bundle_dir: Path = BUNDLE_DIR, tabular_alias: str = "champion"
             continue  # no notes champion yet: tabular-only bundle
         single_file_onnx(Path(info["onnx"]), staging / f"{key}.onnx")
         meta[key] = {"name": name, "version": info["version"], "tags": info["tags"]}
-        if key == "tabular":
-            meta[key]["alias"] = tabular_alias
+        meta[key]["alias"] = alias
         if info.get("training"):
             meta[key]["training"] = info["training"]
     shutil.rmtree(downloads)
@@ -187,9 +190,10 @@ def load_models() -> LoadedModels:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Export registry models into a serving bundle")
     parser.add_argument("--alias", default="champion", help="triage model alias, e.g. challenger")
+    parser.add_argument("--notes-alias", default="champion", help="notes model alias")
     parser.add_argument("--out", type=Path, default=BUNDLE_DIR, help="bundle folder")
     args = parser.parse_args(argv)
-    meta = export_bundle(args.out, args.alias)
+    meta = export_bundle(args.out, args.alias, args.notes_alias)
     print(json.dumps({k: {"name": v["name"], "version": v["version"]} for k, v in meta.items()}))
 
 

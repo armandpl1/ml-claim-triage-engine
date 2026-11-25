@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest k8s-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest envs promote rollback-model k8s-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -240,6 +240,19 @@ loadtest:  ## k6 load test through the gateway, 10 -> 30 req/s (~5.5 min); resul
 	infra/k8s/watch_pods.sh $(LOADTEST_DIR)/pods.csv & echo $$! > .kind/watch.pid; \
 	cd infra/k8s && k6 run --quiet --summary-export ../../$(LOADTEST_DIR)/summary.json loadtest.js; \
 	status=$$?; kill $$(cat ../../.kind/watch.pid); exit $$status
+
+# Model promotion between environments (src/serving/environments.py):
+# gate -> @champion -> @staging -> @prod, each move reversible.
+ENVIRONMENTS := MLFLOW_TRACKING_URI=sqlite:///mlflow.db $(RUN) python -m src.serving.environments
+
+envs:  ## Which model version each environment runs (registry aliases)
+	$(ENVIRONMENTS) status
+
+promote:  ## Promote models: make promote ENV=staging (from @champion) or ENV=prod (from @staging)
+	$(ENVIRONMENTS) promote $(ENV)
+
+rollback-model:  ## Put an environment's models back on their previous version: make rollback-model ENV=prod
+	$(ENVIRONMENTS) rollback $(ENV)
 
 k8s-down:  ## Delete the kind cluster (frees its RAM)
 	kind delete cluster --name $(KIND_CLUSTER)
