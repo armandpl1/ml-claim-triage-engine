@@ -1,0 +1,17 @@
+# Trivy findings on the Helm chart that are deliberate, with the reason.
+# Anything not listed here fails CI.
+misconfigurations:
+  - id: AVD-KSV-0011
+    statement: >-
+      No CPU limit, on purpose: a limit throttles the pod during short
+      bursts and adds latency. The CPU request is what the scheduler and
+      the autoscaler use.
+  - id: AVD-KSV-0023
+    statement: >-
+      hostPath is how the local kind cluster reads the model bundles and the
+      online feature store from the repository (read-only). In a real
+      cluster they would come from object storage or a volume.
+  - id: AVD-KSV-0110
+    statement: >-
+      One application on a local cluster; Helm sets the release's namespace
+      at install time.

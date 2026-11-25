@@ -1,6 +1,7 @@
 # CI: lint and types, the three-tier test suite, and a Docker build check.
 #
 #   lint (ruff, mypy) ──> test (unit, behavioral, integration) ──> docker (build + smoke)
+#   lint ──> helm (lint, render and scan the Kubernetes chart; not a required check)
 #   lint ──> storage (Terraform on an AWS emulator, then the MLflow server on
 #            Postgres + S3; not a required check)
 #
@@ -179,4 +180,44 @@ jobs:
         with:
           name: storage-logs
           path: storage-logs.txt
+          retention-days: 14
+
+  helm:
+    name: Helm chart (lint, render, security scan)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.3
+
+      - name: Lint
+        run: helm lint --strict infra/k8s/chart
+
+      - name: Render the stable release (with a canary route) and the canary
+        run: |
+          mkdir -p rendered
+          helm template claim-triage-api infra/k8s/chart --set image.tag=ci \
+            --set route.enabled=true --set route.canaryWeight=10 > rendered/stable.yaml
+          helm template claim-triage-api-canary infra/k8s/chart --set image.tag=ci \
+            --values infra/k8s/canary-values.yaml > rendered/canary.yaml
+
+      - name: Security scan (Trivy; deliberate exceptions in infra/k8s/trivyignore.yaml)
+        run: |
+          docker run --rm -v "$PWD/infra/k8s:/src" aquasec/trivy:0.67.2 \
+            config --quiet --exit-code 1 --ignorefile /src/trivyignore.yaml /src
+
+      - name: Upload the rendered manifests
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: helm-rendered
+          path: rendered/
           retention-days: 14

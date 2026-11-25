@@ -5,7 +5,8 @@ track: stable
 
 image:
   repository: claim-triage-api
-  tag: latest
+  # make k8s-deploy sets the git commit; empty falls back to appVersion.
+  tag: ""
   # Images are loaded into kind with `kind load docker-image`, never pulled.
   pullPolicy: Never
 
