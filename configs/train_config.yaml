@@ -97,3 +97,23 @@ explain:
   # Contributions below min_contribution are left out as noise.
   top_k: 3
   min_contribution: 0.01
+
+fairness:
+  # Fairness audit of the tabular champion (src/evaluation/fairness.py) on
+  # the untouched test split, at the served decision threshold. The question
+  # is equal opportunity: do high-cost claims from every group reach a
+  # senior adjuster at the same rate? A group is flagged when its recall's
+  # Wilson interval lies entirely below the overall recall. Driver age and
+  # region are standard motor rating factors; this audits the routing
+  # outcome, not whether a factor may be used.
+  confidence: 0.95
+  # Groups with fewer high-cost claims are reported but not judged: their
+  # recall interval is too wide to mean anything. Regions below it are
+  # pooled into "other regions".
+  min_positives: 10
+  driver_age_bands:   # [lowest age, first age of the next band)
+    under 25: [16, 25]
+    25-39: [25, 40]
+    40-59: [40, 60]
+    60-69: [60, 70]
+    70+: [70, 101]
