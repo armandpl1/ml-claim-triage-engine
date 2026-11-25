@@ -63,6 +63,14 @@ stages:
       hash: md5
       md5: 372762c63b78baa18dd8cbdc745048f1
       size: 3617
+    - path: configs/feature_store.yaml
+      hash: md5
+      md5: 784fbae6a498a72fa60f57f5a471787c
+      size: 2308
+    - path: data/feature_store/offline.duckdb
+      hash: md5
+      md5: ab4ac839e8ea7de2ec240ac9bbb5aa2d
+      size: 21770240
     - path: data/processed/validation_report.json
       hash: md5
       md5: 3a031ba1b663bbae39e04fcbe78603af
@@ -76,10 +84,15 @@ stages:
       md5: a6434184a9dbca933e5695b4b0949606.dir
       size: 1698
       nfiles: 3
+    - path: src/feature_store
+      hash: md5
+      md5: b7e11dc794a4a20d118d6f4009fc1ba7.dir
+      size: 10287
+      nfiles: 3
     - path: src/features
       hash: md5
-      md5: ecc14fe4b2d8b1eb02fabcdf9cf72c8b.dir
-      size: 10261
+      md5: f42ee3b54a6dd00025d96abb625dccb8.dir
+      size: 11160
       nfiles: 6
     outs:
     - path: artifacts/preprocessor.joblib
@@ -111,3 +124,37 @@ stages:
       hash: md5
       md5: 13b2a50cdb73fdb6e4224fa703a7b473
       size: 272216
+  feature_store:
+    cmd: python -m src.feature_store.offline
+    deps:
+    - path: configs/data_config.yaml
+      hash: md5
+      md5: 372762c63b78baa18dd8cbdc745048f1
+      size: 3617
+    - path: configs/feature_store.yaml
+      hash: md5
+      md5: 784fbae6a498a72fa60f57f5a471787c
+      size: 2308
+    - path: data/processed/validation_report.json
+      hash: md5
+      md5: 3a031ba1b663bbae39e04fcbe78603af
+      size: 211
+    - path: data/warehouse.duckdb
+      hash: md5
+      md5: a2d822d6b831455b3c65a9ea727153a3
+      size: 26226688
+    - path: src/common
+      hash: md5
+      md5: a6434184a9dbca933e5695b4b0949606.dir
+      size: 1698
+      nfiles: 3
+    - path: src/feature_store
+      hash: md5
+      md5: b7e11dc794a4a20d118d6f4009fc1ba7.dir
+      size: 10287
+      nfiles: 3
+    outs:
+    - path: data/feature_store/offline.duckdb
+      hash: md5
+      md5: ab4ac839e8ea7de2ec240ac9bbb5aa2d
+      size: 21770240

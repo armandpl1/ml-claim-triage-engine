@@ -30,13 +30,30 @@ stages:
       - data/processed/validation_report.json:
           cache: false
 
+  # Every version of each policy's features over time (src/feature_store/),
+  # read point-in-time by the features stage and the nightly batch job.
+  feature_store:
+    cmd: python -m src.feature_store.offline
+    deps:
+      - src/feature_store
+      - src/common
+      - configs/feature_store.yaml
+      - configs/data_config.yaml
+      - data/warehouse.duckdb
+      - data/processed/validation_report.json
+    outs:
+      - data/feature_store/offline.duckdb
+
   features:
     cmd: python -m src.features.build_features
     deps:
       - src/features
+      - src/feature_store
       - src/common
       - configs/data_config.yaml
+      - configs/feature_store.yaml
       - data/warehouse.duckdb
+      - data/feature_store/offline.duckdb
       - data/processed/validation_report.json
     outs:
       - data/processed/train.parquet
