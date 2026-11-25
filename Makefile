@@ -3,7 +3,7 @@
 RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
-.PHONY: help install hooks lint typecheck test ci data feature-store features train train-tabular train-nlp \
+.PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
         text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down clean
 
 help:  ## List targets
@@ -32,6 +32,9 @@ data:  ## Fetch, stage and validate data (re-runs only changed stages)
 
 feature-store:  ## Rebuild the offline feature store: every version of each policy's features
 	$(RUN) dvc repro feature_store
+
+materialize:  ## Load the online store as of now (AS_OF=2025-02-01 for a past date), then check skew
+	$(RUN) python -m src.feature_store.materialize $(if $(AS_OF),--as-of $(AS_OF))
 
 features:  ## Split, fit the preprocessor on train only, save the drift reference
 	$(RUN) dvc repro features
