@@ -4,7 +4,7 @@ RUN := uv run
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install hooks lint typecheck test ci data feature-store materialize features train train-tabular train-nlp \
-        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke canary-bundle canary-start canary-weight canary-rollback canary-promote k8s-down clean
+        text-baseline benchmark mlflow-ui gate bundle serve up down simulate drift push-data pull-data fairness model-card batch-score batch-backfill orchestrate retrain nightly infra-up mlflow-up mlflow-check infra-plan infra-check infra-down k8s-tools k8s-up k8s-image k8s-deploy k8s-smoke canary-bundle canary-start canary-weight canary-rollback canary-promote loadtest k8s-down clean
 
 help:  ## List targets
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -231,6 +231,15 @@ canary-promote:  ## Only if the canary's model is @champion: refresh the stable 
 	kubectl rollout restart deployment/claim-triage-api-stable
 	kubectl rollout status deployment/claim-triage-api-stable --timeout 3m
 	$(MAKE) canary-rollback
+
+LOADTEST_DIR := reports/loadtest
+
+loadtest:  ## k6 load test through the gateway, 10 -> 30 req/s (~5.5 min); results in reports/loadtest/
+	mkdir -p $(LOADTEST_DIR) .kind
+	$(RUN) python -c "import json, pandas as pd; ids = sorted(set(pd.read_parquet('data/processed/test.parquet').policy_id.astype(int))); json.dump(ids, open('.kind/policies.json', 'w'))"
+	infra/k8s/watch_pods.sh $(LOADTEST_DIR)/pods.csv & echo $$! > .kind/watch.pid; \
+	cd infra/k8s && k6 run --quiet --summary-export ../../$(LOADTEST_DIR)/summary.json loadtest.js; \
+	status=$$?; kill $$(cat ../../.kind/watch.pid); exit $$status
 
 k8s-down:  ## Delete the kind cluster (frees its RAM)
 	kind delete cluster --name $(KIND_CLUSTER)
