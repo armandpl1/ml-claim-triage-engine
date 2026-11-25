@@ -82,3 +82,13 @@ gate:
   bootstrap:
     tabular_min_lift: 1.5     # PR-AUC at least 1.5x the positive rate
     notes_min_macro_f1: 0.5
+
+explain:
+  # Reason codes for the tabular champion (src/explain/). The registry serves
+  # ONNX, which can't attribute a score to features, so the champion is
+  # rebuilt as LightGBM from its logged hyperparameters on the training split
+  # and must predict the same as the served ONNX model: the largest
+  # probability difference allowed on the claims being explained. A refit of
+  # champion v1 matched to 1.4e-7 (2026-11-24), so 1e-5 leaves room for
+  # float32 rounding but catches a different model.
+  parity_tolerance: 0.00001
