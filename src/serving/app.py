@@ -11,8 +11,9 @@
     GET  /metrics   Prometheus metrics: requests, errors, latency, routes
 
 Models load once at startup (src/serving/model_store.py). Every prediction is
-logged after the response is sent (a background task, so logging never adds
-latency) to a SQLite inference log, which the drift detector compares with
+queued after the response is sent and written in batches by one thread
+(src/serving/inference_log.py, so logging never adds latency) to a SQLite
+inference log, which the drift detector compares with
 the training reference (monitoring/drift_detector.py).
 
 Run locally:  make serve      (http://localhost:8000/docs)
@@ -22,7 +23,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -37,6 +37,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, ge
 from src.common.config import ROOT
 from src.feature_store.online import OnlineStore
 from src.features.row import log_density
+from src.serving.inference_log import InferenceLog
 from src.serving.model_store import LoadedModels, load_models
 from src.serving.schemas import (
     ClaimPrediction,
@@ -64,11 +65,6 @@ NOTE_CATEGORIES = Counter(
 )
 MODEL_VERSION = Gauge("claim_api_model_version", "Serving model version", ["model"])
 
-LOG_SCHEMA = """CREATE TABLE IF NOT EXISTS predictions (
-    request_id TEXT PRIMARY KEY, ts REAL, claim_id TEXT, features TEXT, adjuster_note TEXT,
-    high_cost_probability REAL, route TEXT, note_category TEXT,
-    tabular_version TEXT, notes_version TEXT, latency_ms REAL)"""
-
 
 def tabular_feeds(claim: ClaimRequest) -> dict[str, np.ndarray]:
     """ONNX inputs for one claim, computed exactly like training."""
@@ -84,21 +80,11 @@ def softmax(logits: np.ndarray) -> np.ndarray:
     return exp / exp.sum()
 
 
-def write_log(row: dict) -> None:
-    INFERENCE_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(INFERENCE_LOG) as con:
-        con.execute(LOG_SCHEMA)
-        con.execute(
-            "INSERT INTO predictions VALUES (:request_id, :ts, :claim_id, :features, "
-            ":adjuster_note, :high_cost_probability, :route, :note_category, "
-            ":tabular_version, :notes_version, :latency_ms)",
-            row,
-        )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.models = load_models()
+    app.state.inference_log = InferenceLog(INFERENCE_LOG)
+    app.state.inference_log.start()
     # Optional: without a store, /predict/policy answers 503 and /predict works.
     app.state.online = OnlineStore(ONLINE_STORE) if ONLINE_STORE.exists() else None
     app.state.started = time.time()
@@ -107,6 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     if app.state.online:
         app.state.online.close()
+    app.state.inference_log.stop()  # write what is still queued
 
 
 app = FastAPI(title="Claim triage API", version="1.0", lifespan=lifespan)
@@ -126,7 +113,10 @@ async def record_metrics(
 
 
 @app.get("/health", response_model=Health)
-def health(request: Request) -> Health:
+async def health(request: Request) -> Health:
+    # async: answered on the event loop, not queued in the thread pool behind
+    # /predict calls. Under load, a queued health check timed out Kubernetes'
+    # probes and took busy pods out of service (step 6 load test).
     models: LoadedModels = request.app.state.models
     return Health(
         status="ok" if models.notes else "degraded",
@@ -200,7 +190,7 @@ def score_claim(
     )
     features = claim.model_dump(exclude={"claim_id", "adjuster_note"})
     background.add_task(
-        write_log,
+        request.app.state.inference_log.put,
         {
             "request_id": result.request_id,
             "ts": time.time(),
