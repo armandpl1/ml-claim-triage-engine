@@ -9,6 +9,10 @@ image:
   repository: claim-triage-api
   # make k8s-deploy sets the git commit; empty falls back to appVersion.
   tag: ""
+  # The image's content ID, set by make deploy. A pod annotation, so a
+  # different image under the same tag (a local stand-in replaced by the
+  # release) restarts the pods.
+  id: ""
   # Images are loaded into kind with `kind load docker-image`, never pulled.
   pullPolicy: Never
 

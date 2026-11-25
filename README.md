@@ -588,9 +588,11 @@ What the drills and live checks found and fixed:
 - **The store's age was 5 hours wrong.** `materialize` wrote local time (EST) without a timezone; the pods, in UTC, read it as UTC, so the stale-store alert would fire 5 hours late. Times now carry their offset.
 - **The error ratio had no value when there were no errors,** instead of 0 (the 5xx series didn't exist yet), found against the live API. Fixed with `or vector(0)`.
 - **Model changes didn't restart the pods.** With the same image the pod spec didn't change, so pods kept the old models in memory; the bundle hash annotation fixes it.
+- **The real 1.0.0 didn't replace its local stand-in.** Staging and prod first ran a local build under the 1.0.0 tag. After the release, `make deploy` found that local image and didn't pull; and when the image was replaced by hand, the unchanged tag meant no pod restarted (`/health` still said `1.0.0+local`). `make deploy` now pulls from GHCR first, and the image's content ID is a pod annotation, so different content under the same tag restarts the pods.
+
+**Released:** `v1.0.0` was tagged on the merge of this work; the release workflow published `ghcr.io/armandpl1/claim-triage-api` as `1.0.0`, `1.0` and `sha-f7f21a2` (public, labeled with the source commit). Staging and prod run it: `/health` reports `1.0.0`.
 
 Limits:
-- **The 1.0.0 image isn't on GHCR yet:** it is published when the tag is pushed after this branch merges. The environments ran a local build of the same code under that tag (`/health` says `1.0.0+local`).
 - **One cluster for three environments.** Real staging and prod would be separate clusters or accounts; here they are namespaces on one node.
 - **Prometheus runs in docker compose, not in the cluster,** and nothing routes alerts to anyone (Alertmanager would). See [docs/slo.md](docs/slo.md).
 

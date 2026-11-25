@@ -16,9 +16,14 @@ spec:
   template:
     metadata:
       labels: {{- include "api.labels" . | nindent 8 }}
-      {{- with .Values.models.revision }}
+      {{- if or .Values.models.revision .Values.image.id }}
       annotations:
+        {{- with .Values.models.revision }}
         checksum/models: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.image.id }}
+        checksum/image: {{ . | quote }}
+        {{- end }}
       {{- end }}
     spec:
       automountServiceAccountToken: false   # the API never calls Kubernetes
