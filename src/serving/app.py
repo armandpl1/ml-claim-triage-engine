@@ -89,7 +89,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.inference_log = InferenceLog(INFERENCE_LOG)
     app.state.inference_log.start()
     # Optional: without a store, /predict/policy answers 503 and /predict works.
-    app.state.online = OnlineStore(ONLINE_STORE) if ONLINE_STORE.exists() else None
+    # Copied into memory: lookups never wait on the disk.
+    app.state.online = OnlineStore(ONLINE_STORE, in_memory=True) if ONLINE_STORE.exists() else None
     app.state.started = time.time()
     for name, version in app.state.models.versions.items():
         MODEL_VERSION.labels(model=name).set(float(version))

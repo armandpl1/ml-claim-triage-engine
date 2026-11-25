@@ -40,13 +40,14 @@ featureStore:
 # fighting over the same cores.
 ortThreads: 1
 
-# Requests from a measured pod: 183 MB with both models after 50 requests.
+# Requests from measured pods: 183 MB with both models after 50 requests,
+# plus about 45 MB for the online feature store held in memory.
 # No CPU limit: a limit throttles latency spikes; the request is what the
 # scheduler and the autoscaler use.
 resources:
   requests:
     cpu: 250m
-    memory: 256Mi
+    memory: 320Mi
   limits:
     memory: 512Mi
 

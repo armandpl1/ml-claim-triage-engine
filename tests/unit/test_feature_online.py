@@ -95,3 +95,17 @@ def test_write_is_atomic(registry):
 def test_missing_store_explains_how_to_build_it(tmp_path):
     with pytest.raises(FileNotFoundError, match="make materialize"):
         OnlineStore(tmp_path / "nope.db")
+
+
+def test_in_memory_store_answers_like_the_file_and_survives_its_removal(registry, raw_policies):
+    as_of = datetime(2026, 1, 1)
+    materialize.write_online(materialize.latest_versions(registry, as_of), registry.online, as_of)
+    on_disk = OnlineStore(registry.online)
+    in_memory = OnlineStore(registry.online, in_memory=True)
+    for policy in raw_policies["policy_id"].head(20):
+        assert in_memory.get(int(policy)) == on_disk.get(int(policy))
+    assert in_memory.info() == on_disk.info()
+    on_disk.close()
+    registry.online.unlink()  # a re-materialization replaces the file
+    assert in_memory.get(int(raw_policies["policy_id"].iloc[0])) is not None
+    in_memory.close()
